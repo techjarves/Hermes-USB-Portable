@@ -41,7 +41,18 @@ case "$ARCH_RAW" in
         ;;
 esac
 
-RUNTIME_DIR="$CACHE_DIR/runtimes/${PLATFORM}-${ARCH}"
+# Resolve where the runtime lives. On exFAT/NTFS drives (no symlink support)
+# the python/node/venv runtime is relocated to local disk to avoid
+# "Cannot create symlink: Operation not permitted" during extraction.
+source "$PORTABLE_ROOT/scripts/resolve-runtime.sh"
+if [ "$RUNTIME_RELOCATED" = "1" ]; then
+    echo ""
+    echo "[INFO] This drive cannot store symlinks (e.g. exFAT/NTFS)."
+    echo "       Installing the Linux/macOS runtime on local disk instead:"
+    echo "       $RUNTIME_DIR"
+    echo "       Your data/ and src/ remain on the portable drive."
+fi
+
 BIN_DIR="$RUNTIME_DIR/bin"
 TMP_DIR="$RUNTIME_DIR/_tmp"
 
@@ -325,6 +336,9 @@ if ! "$UV_EXE" venv "$VENV_DIR" --python "$PYTHON_EXE"; then
     echo "[ERROR] Failed to create virtual environment"
     exit 1
 fi
+# Record the venv location so launch.sh uses this exact venv instead of
+# falling back to a /tmp rebuild.
+echo "$VENV_DIR" > "$RUNTIME_DIR/venv.path"
 done_msg "Virtual environment ready"
 
 # ---------------------------------------------------------------------------

@@ -157,7 +157,7 @@ function Move-SubfolderContents($Source, $Dest) {
 # ---------------------------------------------------------------------------
 $readyFlag = Join-Path $RuntimeDir "ready.flag"
 if (Test-Path $readyFlag) {
-    $coreFiles = @("python\python.exe", "uv\uv.exe", "venv\Scripts\hermes.exe")
+    $coreFiles = @("python\python.exe", "uv\uv.exe", "venv\Scripts\python.exe")
     $missing = $coreFiles | Where-Object { -not (Test-Path (Join-Path $RuntimeDir $_)) }
     if ($missing) {
         Write-Warn "ready.flag exists but core files are missing - restarting setup ..."

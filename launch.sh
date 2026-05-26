@@ -41,7 +41,14 @@ case "$ARCH_RAW" in
         ;;
 esac
 
-RUNTIME_DIR="$CACHE_DIR/runtimes/${PLATFORM}-${ARCH}"
+# Resolve where the runtime lives. On exFAT/NTFS USB drives (no symlink
+# support) it is relocated to local disk; otherwise it stays on the drive.
+source "$PORTABLE_ROOT/scripts/resolve-runtime.sh"
+if [ "$RUNTIME_RELOCATED" = "1" ]; then
+    echo "[INFO] Drive has no symlink support — runtime runs from local disk:"
+    echo "       $RUNTIME_DIR"
+    echo "       (your data/ and src/ stay on the portable drive)"
+fi
 
 # ---------------------------------------------------------------------------
 # First-run setup
@@ -128,8 +135,10 @@ export PLAYWRIGHT_BROWSERS_PATH="$RUNTIME_DIR/playwright"
 export NODE_PATH="$RUNTIME_DIR/node/lib/node_modules"
 export NPM_CONFIG_PREFIX="$RUNTIME_DIR/node"
 
-# Prevent Node/npm from writing to host home directory
-export HOME="$PORTABLE_ROOT/.cache/unix-home"
+# Prevent Node/npm from writing to host home directory.
+# Lives alongside the runtime so it inherits a symlink-capable FS (npm's
+# node_modules/.bin uses symlinks, which would fail on an exFAT drive).
+export HOME="$RUNTIME_DIR/unix-home"
 mkdir -p "$HOME"
 
 # ---------------------------------------------------------------------------

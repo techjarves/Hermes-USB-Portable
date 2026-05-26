@@ -7,6 +7,10 @@ REM ============================================================================
 REM Double-click this file to launch Hermes.
 REM On first run, it downloads ~600MB of runtime files automatically.
 REM All data stays in the "data\" folder - nothing touches the host computer.
+REM
+REM Portability: on every launch the venv is self-healed (scripts\heal-venv.ps1)
+REM so the folder works on any drive letter / machine with no rebuild, and Hermes
+REM is started via "python -m hermes_cli.main" instead of the path-baked hermes.exe.
 REM ============================================================================
 
 REM Resolve portable root (directory containing this script)
@@ -42,11 +46,17 @@ if not exist "%RUNTIME_DIR%\ready.flag" (
 REM ---------------------------------------------------------------------------
 REM Environment isolation - keep everything inside the portable folder
 REM ---------------------------------------------------------------------------
+REM Self-heal: make the venv drive/path agnostic (idempotent, local, no network)
+if exist "%RUNTIME_DIR%\venv\pyvenv.cfg" (
+    powershell -ExecutionPolicy Bypass -File "%PORTABLE_ROOT%\scripts\heal-venv.ps1" -Root "%PORTABLE_ROOT%" >nul 2>&1
+)
+
 set "VIRTUAL_ENV=%RUNTIME_DIR%\venv"
+set "VENV_PYTHON=%VIRTUAL_ENV%\Scripts\python.exe"
 set "PATH=%VIRTUAL_ENV%\Scripts;%RUNTIME_DIR%\python;%RUNTIME_DIR%\python\Scripts;%RUNTIME_DIR%\node;%RUNTIME_DIR%\uv;%RUNTIME_DIR%\bin;%PATH%"
 set "PYTHONNOUSERSITE=1"
 set "PYTHONHOME="
-set "PYTHONPATH="
+set "PYTHONPATH=%SRC_DIR%\hermes-agent"
 set "UV_NO_CONFIG=1"
 set "UV_PYTHON=%RUNTIME_DIR%\python\python.exe"
 set "PLAYWRIGHT_BROWSERS_PATH=%RUNTIME_DIR%\playwright"
@@ -76,7 +86,7 @@ if /I "%~1"=="hermes" (
 
 REM If explicit arguments were passed, run Hermes directly (skip menu)
 if not "%ARGS%"=="" (
-    hermes %ARGS%
+    "%VENV_PYTHON%" -m hermes_cli.main %ARGS%
     exit /b
 )
 
@@ -204,23 +214,23 @@ REM Menu Actions
 REM ---------------------------------------------------------------------------
 :menu_chat
 echo.
-hermes
+"%VENV_PYTHON%" -m hermes_cli.main
 goto :show_menu
 
 :menu_setup
 echo.
-hermes setup
+"%VENV_PYTHON%" -m hermes_cli.main setup
 goto :detect_status
 
 :menu_gateway
 if "!GATEWAY_STATUS!"=="Running (PID !GATEWAY_PID!)" (
-    hermes gateway stop
+    "%VENV_PYTHON%" -m hermes_cli.main gateway stop
     echo.
     echo %BRIGHT_GREEN%Gateway stopped.%RESET%
 ) else (
     echo.
     echo %CYAN%Starting gateway in background ...%RESET%
-    start "" hermes gateway
+    start "" "%VENV_PYTHON%" -m hermes_cli.main gateway
     timeout /t 2 /nobreak >nul
 )
 pause
@@ -264,7 +274,7 @@ goto :show_advanced
 
 :adv_doctor
 echo.
-hermes doctor
+"%VENV_PYTHON%" -m hermes_cli.main doctor
 pause
 goto :show_advanced
 
@@ -282,11 +292,11 @@ goto :show_advanced
 
 :adv_config
 echo.
-hermes config edit
+"%VENV_PYTHON%" -m hermes_cli.main config edit
 goto :show_advanced
 
 :adv_restart
-hermes gateway restart
+"%VENV_PYTHON%" -m hermes_cli.main gateway restart
 echo.
 echo %BRIGHT_GREEN%Gateway restarted.%RESET%
 pause
@@ -294,6 +304,6 @@ goto :detect_status
 
 :adv_update
 echo.
-hermes update
+"%VENV_PYTHON%" -m hermes_cli.main update
 pause
 goto :show_advanced
