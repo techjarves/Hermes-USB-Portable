@@ -19,18 +19,22 @@ $CacheDir   = Join-Path $Root ".cache"
 $RuntimeDir = Join-Path $CacheDir "runtimes\windows-x64"
 $SrcDir     = Join-Path $Root "src"
 $BinDir     = Join-Path $RuntimeDir "bin"
-$TempDir    = Join-Path $RuntimeDir "_temp"
+$TempDir    = Join-Path $Root ".tmp"
+
 
 New-Item -ItemType Directory -Force -Path $RuntimeDir, $SrcDir, $BinDir, $TempDir | Out-Null
+
+# Clean up macOS metadata junk files (._*) from exFAT drives to prevent pip/uv errors
+Get-ChildItem -Path $Root -Filter "._*" -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------------------
 # Download URLs (pinned for reliability)
 # ---------------------------------------------------------------------------
-$PythonUrl  = "https://github.com/indygreg/python-build-standalone/releases/download/20241016/cpython-3.11.10+20241016-x86_64-pc-windows-msvc-install_only.tar.gz"
-$NodeUrl    = "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip"
-$UvUrl      = "https://github.com/astral-sh/uv/releases/download/0.6.8/uv-x86_64-pc-windows-msvc.zip"
-$RgUrl      = "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-pc-windows-msvc.zip"
-$GitUrl     = "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/MinGit-2.53.0-64-bit.zip"
+$PythonUrl  = "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15+20260602-x86_64-pc-windows-msvc-install_only.tar.gz"
+$NodeUrl    = "https://nodejs.org/dist/v22.22.3/node-v22.22.3-win-x64.zip"
+$UvUrl      = "https://github.com/astral-sh/uv/releases/download/0.11.19/uv-x86_64-pc-windows-msvc.zip"
+$RgUrl      = "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip"
+$GitUrl     = "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/MinGit-2.54.0-64-bit.zip"
 $SourceUrl  = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/main.zip"
 
 # ---------------------------------------------------------------------------
@@ -70,16 +74,28 @@ function Download-File($Url, $OutFile) {
 
     # Prefer curl.exe for native progress bar (speed, percent, time left, time spent)
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-        $curlArgs = @("-L", "-f", "--retry", "3", "--connect-timeout", "30", "--max-time", "600", "-o", $OutFile, $Url)
+        $curlArgs = @("-L", "-f", "--ssl-no-revoke", "--retry", "3", "--retry-delay", "2", "--connect-timeout", "30", "--max-time", "900", "-o", $OutFile, $Url)
         & curl.exe @curlArgs
         if ($LASTEXITCODE -ne 0) {
+            Write-Warn ("curl.exe failed with exit code " + $LASTEXITCODE + " - falling back to PowerShell download ...")
             if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
-            throw "curl.exe failed with exit code " + $LASTEXITCODE + " while downloading " + $name
+            try {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+            } catch {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            }
+            try {
+                Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 900
+            }
+            catch {
+                if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
+                throw "Failed to download " + $name + ": " + $_
+            }
         }
     } else {
         $ProgressPreference = 'Continue'
         try {
-            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 600
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 900
         }
         catch {
             if (Test-Path $OutFile) { Remove-Item $OutFile -Force }
@@ -133,7 +149,41 @@ function Extract-Zip($Archive, $Destination) {
     }
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     try {
-        Expand-Archive -Path $Archive -DestinationPath $Destination -Force
+        $extracted = $false
+        try {
+            Expand-Archive -Path $Archive -DestinationPath $Destination -Force
+            $extracted = $true
+        } catch {
+            if (Test-Path $Destination) {
+                Remove-Item $Destination -Recurse -Force
+                New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+            }
+        }
+
+        $winTar = "C:\Windows\System32\tar.exe"
+        if ((-not $extracted) -and (Test-Path $winTar)) {
+            & $winTar -xf "$Archive" -C "$Destination" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $extracted = $true
+            }
+        } elseif ((-not $extracted) -and (Get-Command tar.exe -ErrorAction SilentlyContinue)) {
+            & tar.exe -xf "$Archive" -C "$Destination" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $extracted = $true
+            }
+        }
+
+        if (-not $extracted) {
+            if (Test-Path $Destination) {
+                Remove-Item $Destination -Recurse -Force
+                New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+            }
+            throw "no available zip extractor succeeded"
+        }
+
+        if (-not (Get-ChildItem $Destination -Force | Select-Object -First 1)) {
+            throw "archive extracted with no files"
+        }
     } catch {
         Remove-Item $Destination -Recurse -Force -ErrorAction SilentlyContinue
         throw "zip extraction failed for " + $label + ": " + $_
@@ -150,6 +200,18 @@ function Move-SubfolderContents($Source, $Dest) {
         Move-Item $sub.FullName $Dest -Force
         Remove-Item $Source -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Copy-DirectoryContents($Source, $Dest) {
+    if (Test-Path $Dest) {
+        try {
+            Remove-Item $Dest -Recurse -Force -ErrorAction Stop
+        } catch {
+            Get-ChildItem $Dest -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+    Copy-Item (Join-Path $Source "*") $Dest -Recurse -Force
 }
 
 # ---------------------------------------------------------------------------
@@ -183,6 +245,10 @@ Download-File $NodeUrl $nodeArchive
 $nodeTemp = Join-Path $TempDir "node"
 Extract-Zip $nodeArchive $nodeTemp
 Move-SubfolderContents $nodeTemp (Join-Path $RuntimeDir "node")
+& (Join-Path $RuntimeDir "node\node.exe") --version | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Node.js verification failed" }
+& (Join-Path $RuntimeDir "node\npm.cmd") --version | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "npm verification failed" }
 Write-Done "Node.js ready"
 
 # ---------------------------------------------------------------------------
@@ -232,9 +298,11 @@ Download-File $SourceUrl $srcArchive
 $srcTemp = Join-Path $TempDir "source"
 Extract-Zip $srcArchive $srcTemp
 $srcSub = Get-ChildItem $srcTemp -Directory | Select-Object -First 1
+if (-not $srcSub) {
+    throw "Hermes source archive did not contain a source folder"
+}
 $destSrc = Join-Path $SrcDir "hermes-agent"
-if (Test-Path $destSrc) { Remove-Item $destSrc -Recurse -Force }
-Move-Item $srcSub.FullName $destSrc -Force
+Copy-DirectoryContents $srcSub.FullName $destSrc
 Write-Done "Source code ready"
 
 # ---------------------------------------------------------------------------
@@ -246,7 +314,14 @@ $venvDir   = Join-Path $RuntimeDir "venv"
 $uvExe     = Join-Path $RuntimeDir "uv\uv.exe"
 
 & $uvExe venv $venvDir --python $pythonExe
-if ($LASTEXITCODE -ne 0) { throw "Failed to create venv" }
+if ($LASTEXITCODE -ne 0) {
+    Write-Warn "uv venv failed - falling back to Python venv with copied files ..."
+    Remove-Item $venvDir -Recurse -Force -ErrorAction SilentlyContinue
+    & $pythonExe -m venv $venvDir --copies
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create venv" }
+}
+& (Join-Path $venvDir "Scripts\python.exe") --version | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Virtual environment verification failed" }
 Write-Done "Virtual environment ready"
 
 # ---------------------------------------------------------------------------
@@ -258,7 +333,7 @@ Write-Host "        This may take 3-10 minutes depending on your connection."
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
 
 # Try uv first (faster), fall back to pip on unsupported filesystem (e.g. ExFAT)
-$uvResult = & $uvExe pip install --python $venvPython --link-mode=copy -e "$destSrc[all]" 2>&1
+& $uvExe pip install --python $venvPython --link-mode=copy -e "$destSrc[all]"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "        uv install failed - falling back to pip ..."
     & $venvPython -m ensurepip --upgrade | Out-Null
@@ -268,7 +343,23 @@ if ($LASTEXITCODE -ne 0) {
 Write-Done "Dependencies installed"
 
 # ---------------------------------------------------------------------------
-# 9. Install messaging dependencies (Telegram, etc.)
+# 9. Install provider dependencies
+# ---------------------------------------------------------------------------
+Write-Step "Installing provider dependencies ..."
+& $uvExe pip install --python $venvPython --link-mode=copy "anthropic>=0.39.0"
+if ($LASTEXITCODE -ne 0) {
+    & $venvPython -m pip install "anthropic>=0.39.0" >$null 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Done "Provider dependencies ready"
+    } else {
+        Write-Warn "Anthropic provider install failed - will retry on first use"
+    }
+} else {
+    Write-Done "Provider dependencies ready"
+}
+
+# ---------------------------------------------------------------------------
+# 10. Install messaging dependencies (Telegram, etc.)
 # ---------------------------------------------------------------------------
 # Hermes [all] intentionally excludes messaging deps for size.
 # The lazy-install system is supposed to auto-install on first use,
@@ -276,9 +367,9 @@ Write-Done "Dependencies installed"
 # so Telegram works out of the box.
 # ---------------------------------------------------------------------------
 Write-Step "Installing messaging dependencies (Telegram) ..."
-$tgResult = & $uvExe pip install --python $venvPython --link-mode=copy "python-telegram-bot[webhooks]==22.6" 2>&1
+& $uvExe pip install --python $venvPython --link-mode=copy "python-telegram-bot[webhooks]==22.6"
 if ($LASTEXITCODE -ne 0) {
-    & $venvPython -m pip install "python-telegram-bot[webhooks]==22.6" 2>&1 | Out-Null
+    & $venvPython -m pip install "python-telegram-bot[webhooks]==22.6" >$null 2>$null
     if ($LASTEXITCODE -eq 0) {
         Write-Done "python-telegram-bot ready"
     } else {
@@ -289,7 +380,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 10. Install Playwright browsers (optional, for web tools)
+# 11. Install Playwright browsers (optional, for web tools)
 # ---------------------------------------------------------------------------
 Write-Step "Installing Playwright browsers (optional) ..."
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $RuntimeDir "playwright"
@@ -301,7 +392,7 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# 11. Mark ready
+# 12. Mark ready
 # ---------------------------------------------------------------------------
 "" | Out-File (Join-Path $RuntimeDir "ready.flag") -Encoding utf8
 

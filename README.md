@@ -124,6 +124,32 @@ Alternatively, you can select option **`[2]` (Setup / Reconfigure)** in the Laun
 
 ---
 
+## 🧠 Using a Local Ollama Instance
+
+Hermes Portable can use an Ollama server that is already running on the same computer. Start Ollama first, then pull a model:
+
+```bash
+ollama pull qwen3.6
+```
+
+Launch Hermes Portable and choose **`[2]` Setup / Reconfigure Hermes**. In the Hermes setup wizard:
+
+1. Choose **Quick setup**.
+2. Select **More providers**.
+3. Select **Custom endpoint (enter URL manually)**.
+4. Enter the local OpenAI-compatible Ollama endpoint:
+
+```text
+http://127.0.0.1:11434/v1
+```
+
+5. Leave the API key blank when prompted.
+6. Select the detected Ollama model and leave context length blank to auto-detect it.
+
+For a remote Ollama host, use the same `/v1` endpoint format, for example `http://192.168.1.20:11434/v1`. Make sure the Ollama host is reachable from the computer running Hermes Portable.
+
+---
+
 ## 🖥️ Supported Platforms
 
 | Operating System | CPU Architecture | Setup Status | Notes |
@@ -138,14 +164,26 @@ Alternatively, you can select option **`[2]` (Setup / Reconfigure)** in the Laun
 
 ## 📦 Cache & Runtime Footprint
 
-| Component | Storage Size | Notes |
-| :--- | :--- | :--- |
-| **Launchers & Scripts** | ~50 KB | Metadata and setup automation scripts |
-| **Per-Platform Runtime** | ~600 – 900 MB | Includes Python, Node, uv, and pip caches |
-| **Hermes Source Code** | ~50 MB | Cloned Git repository |
-| **User Data** | ~10 MB → 2 GB+ | Grows as memory and chat history expand |
+The current Windows x64 full first-run setup was measured at about **1.5 GB total** after setup completed.
 
-> ℹ️ *Note: If you run this folder across multiple operating systems (e.g., Windows at home and macOS at work), the `.cache/runtimes/` folder will scale to store the respective platforms (~1.8 GB total).*
+| Component | Measured / Expected Size | Notes |
+| :--- | :--- | :--- |
+| **Launchers & Scripts** | <1 MB | Metadata and setup automation scripts |
+| **Windows x64 Runtime** | ~800 MB | Python, Node.js, uv, Git, ripgrep, venv, and downloaded archives |
+| **Playwright / Local App Cache** | ~400 – 500 MB | Chromium browser cache used by Hermes web tools |
+| **Hermes Source Code** | ~100 MB | Downloaded Hermes Agent source tree |
+| **User Data** | ~10 MB → 2 GB+ | Grows as memory, logs, sessions, skills, and backups accumulate |
+
+Recommended USB / external drive free space:
+
+| Use Case | Free Space to Reserve |
+| :--- | :--- |
+| **One platform only** | **2 GB minimum**, **4 GB recommended** |
+| **Windows + one Unix platform** | **4 – 6 GB recommended** |
+| **Windows + macOS + Linux runtimes** | **8 GB+ recommended** |
+| **Heavy long-term use with many sessions/backups** | **16 – 32 GB recommended** |
+
+> ℹ️ *Each operating system and CPU architecture gets its own `.cache/runtimes/<platform>-<arch>/` folder, so using the same USB drive across Windows, macOS, and Linux will increase storage usage.*
 
 ---
 
