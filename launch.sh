@@ -199,8 +199,26 @@ detect_status() {
     fi
 
     if [ -f "$HERMES_HOME/config.yaml" ]; then
-        PROVIDER_NAME=$(grep '^  provider:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' || true)
-        MODEL_NAME=$(grep '^  default:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' || true)
+        PROVIDER_NAME=$(grep '^  provider:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' | tr -d '"' || true)
+        MODEL_NAME=$(grep '^  default:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' | tr -d '"' || true)
+    fi
+
+    LLAMA_STATUS="Stopped"
+    LLAMA_ICON="[ ]"
+    LLAMA_COLOR="$GRAY"
+    LLAMA_PID=""
+    if [ -f "$HERMES_HOME/llama-server.pid" ]; then
+        LLAMA_PID=$(cat "$HERMES_HOME/llama-server.pid" 2>/dev/null || true)
+    fi
+    if [ -n "$LLAMA_PID" ]; then
+        if kill -0 "$LLAMA_PID" 2>/dev/null; then
+            LLAMA_STATUS="Running (PID $LLAMA_PID)"
+            LLAMA_ICON="[OK]"
+            LLAMA_COLOR="$BRIGHT_GREEN"
+        else
+            LLAMA_STATUS="Stopped"
+            rm -f "$HERMES_HOME/llama-server.pid"
+        fi
     fi
 
     GATEWAY_STATUS="Stopped"
@@ -245,11 +263,13 @@ show_menu() {
     [ -n "$PROVIDER_NAME" ] && echo -e " ${DIM}Provider${RESET} ${CYAN}${PROVIDER_NAME}${RESET}"
     [ -n "$MODEL_NAME" ] && echo -e " ${DIM}Model${RESET}    ${WHITE}${MODEL_NAME}${RESET}"
     echo -e " ${DIM}Gateway${RESET}  ${GATEWAY_COLOR}${GATEWAY_ICON}${RESET} ${WHITE}${GATEWAY_STATUS}${RESET}"
+    [ "$PROVIDER_NAME" = "custom" ] && echo -e " ${DIM}Llama Srv${RESET} ${LLAMA_COLOR}${LLAMA_ICON}${RESET} ${WHITE}${LLAMA_STATUS}${RESET}"
     echo -e " ${DIM}Version${RESET}  ${GRAY}v${HERMES_VERSION}${RESET}"
     echo ""
     echo -e "${BRIGHT_CYAN}----------------------------------------------------------------${RESET}"
     echo ""
     echo -e "  ${BRIGHT_YELLOW}[1]${RESET}  ${WHITE}Start Hermes Chat${RESET}"
+    echo -e "  ${BRIGHT_YELLOW}[D]${RESET}  ${WHITE}Start Hermes Desktop${RESET}"
     echo -e "  ${BRIGHT_YELLOW}[2]${RESET}  ${WHITE}Setup / Reconfigure Hermes${RESET}"
     if [ "$GATEWAY_STATUS" = "Running (PID $GATEWAY_PID)" ]; then
         echo -e "  ${BRIGHT_YELLOW}[3]${RESET}  ${WHITE}Stop Gateway${RESET}  ${RED}[live]${RESET}"
@@ -257,6 +277,7 @@ show_menu() {
         echo -e "  ${BRIGHT_YELLOW}[3]${RESET}  ${WHITE}Start Gateway${RESET}"
     fi
     echo -e "  ${BRIGHT_YELLOW}[4]${RESET}  ${WHITE}Advanced Options${RESET}  ${GRAY}-->${RESET}"
+    echo -e "  ${BRIGHT_YELLOW}[L]${RESET}  ${WHITE}Setup Local LLM (llama.cpp)${RESET}"
     echo -e "  ${BRIGHT_YELLOW}[5]${RESET}  ${GRAY}Exit${RESET}"
     echo ""
     echo -e "${BRIGHT_CYAN}----------------------------------------------------------------${RESET}"
@@ -265,9 +286,11 @@ show_menu() {
 
     case "$choice" in
         1) menu_chat ;;
+        [dD]) menu_desktop ;;
         2) menu_setup ;;
         3) menu_gateway ;;
         4) show_advanced ;;
+        [lL]) menu_local_setup ;;
         5) menu_exit ;;
         *) show_menu ;;
     esac
@@ -275,7 +298,20 @@ show_menu() {
 
 menu_chat() {
     clear
+    ensure_llama_server || return
     hermes
+    stop_llama_server
+    detect_status
+    show_menu
+}
+
+menu_desktop() {
+    clear
+    ensure_llama_server || return
+    echo -e "${CYAN}Starting Hermes Desktop app ...${RESET}"
+    hermes desktop
+    stop_llama_server
+    detect_status
     show_menu
 }
 
@@ -289,10 +325,12 @@ menu_setup() {
 menu_gateway() {
     if [ "$GATEWAY_STATUS" = "Running (PID $GATEWAY_PID)" ]; then
         hermes gateway stop
+        stop_llama_server
         echo ""
         echo -e "${BRIGHT_GREEN}Gateway stopped.${RESET}"
     else
         echo ""
+        ensure_llama_server || return
         echo -e "${CYAN}Starting gateway in background ...${RESET}"
         hermes gateway &
         sleep 2
@@ -302,12 +340,118 @@ menu_gateway() {
     show_menu
 }
 
+menu_local_setup() {
+    clear
+    echo ""
+    "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/local_setup_server.py"
+    detect_status
+    show_menu
+}
+
 menu_exit() {
     clear
+    if [ "$GATEWAY_STATUS" != "Running (PID $GATEWAY_PID)" ]; then
+        stop_llama_server
+    fi
     echo ""
     echo -e "${GRAY}Goodbye!${RESET}"
     echo ""
     exit 0
+}
+
+ensure_llama_server() {
+    if [ "$PROVIDER_NAME" = "custom" ]; then
+        if [ -f "$HERMES_HOME/config.yaml" ]; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' 's/127.0.0.1:11434\/v1/127.0.0.1:39600\/v1/g' "$HERMES_HOME/config.yaml" 2>/dev/null || true
+                sed -i '' 's/localhost:11434\/v1/127.0.0.1:39600\/v1/g' "$HERMES_HOME/config.yaml" 2>/dev/null || true
+            else
+                sed -i 's/127.0.0.1:11434\/v1/127.0.0.1:39600\/v1/g' "$HERMES_HOME/config.yaml" 2>/dev/null || true
+                sed -i 's/localhost:11434\/v1/127.0.0.1:39600\/v1/g' "$HERMES_HOME/config.yaml" 2>/dev/null || true
+            fi
+        fi
+        LLAMA_PID=""
+        if [ -f "$HERMES_HOME/llama-server.pid" ]; then
+            LLAMA_PID=$(cat "$HERMES_HOME/llama-server.pid" 2>/dev/null || true)
+        fi
+        RUNNING=""
+        if [ -n "$LLAMA_PID" ] && kill -0 "$LLAMA_PID" 2>/dev/null; then
+            RUNNING="1"
+        fi
+        if [ -z "$RUNNING" ]; then
+            echo -e "${CYAN}Starting local llama-server in background ...${RESET}"
+            
+            MODEL_FILE=""
+            if [ -f "$HERMES_HOME/config.yaml" ]; then
+                MODEL_FILE=$(grep '^  default:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' | sed 's/custom\///' | sed 's/"//g' || true)
+            fi
+            
+            MODEL_PATH=""
+            if [ -n "$MODEL_FILE" ]; then
+                if [ -f "$HERMES_HOME/models/$MODEL_FILE" ]; then
+                    MODEL_PATH="$HERMES_HOME/models/$MODEL_FILE"
+                else
+                    MODEL_PATH=$(find "$HERMES_HOME/models" -name "$MODEL_FILE" 2>/dev/null | head -n 1 || true)
+                fi
+            fi
+            
+            if [ -z "$MODEL_PATH" ]; then
+                echo -e "${YELLOW}Warning: Configured model not found or not specified. Fallback to first GGUF found.${RESET}"
+                MODEL_PATH=$(find "$HERMES_HOME/models" -name "*.gguf" 2>/dev/null | head -n 1 || true)
+            fi
+            
+            if [ -z "$MODEL_PATH" ]; then
+                echo -e "${RED}Error: No GGUF model file configured or found. Run [L] to configure.${RESET}"
+                read -p "Press Enter to return ..."
+                detect_status
+                show_menu
+                return 1
+            fi
+            
+            SERVER_EXE="$PORTABLE_ROOT/.cache/runtimes/llama-server/llama-server"
+            if [ ! -f "$SERVER_EXE" ]; then
+                echo -e "${RED}Error: llama-server executable not found at $SERVER_EXE. Run [L] to setup.${RESET}"
+                read -p "Press Enter to return ..."
+                detect_status
+                show_menu
+                return 1
+            fi
+            
+            # Start server in background
+            chmod +x "$SERVER_EXE" 2>/dev/null || true
+            mkdir -p "$HERMES_HOME/logs"
+            CTX_LEN=$(grep -E "^[[:space:]]*context_length:" "$HERMES_HOME/config.yaml" | awk '{print $2}' | tr -d '"')
+            if [ -z "$CTX_LEN" ]; then
+                CTX_LEN=32768
+            fi
+            "$SERVER_EXE" -m "$MODEL_PATH" -c $CTX_LEN -np 1 --port 39600 --host 127.0.0.1 --jinja --no-warmup > "$HERMES_HOME/logs/llama-server.log" 2>&1 &
+            NEW_LLAMA_PID=$!
+            
+            if [ -n "$NEW_LLAMA_PID" ]; then
+                echo "$NEW_LLAMA_PID" > "$HERMES_HOME/llama-server.pid"
+                echo -e "${BRIGHT_GREEN}llama-server started (PID $NEW_LLAMA_PID).${RESET}"
+                sleep 3
+            else
+                echo -e "${RED}Error: Failed to start llama-server.${RESET}"
+                read -p "Press Enter to return ..."
+                detect_status
+                show_menu
+                return 1
+            fi
+        fi
+    fi
+    return 0
+}
+
+stop_llama_server() {
+    if [ -f "$HERMES_HOME/llama-server.pid" ]; then
+        LLAMA_PID=$(cat "$HERMES_HOME/llama-server.pid" 2>/dev/null || true)
+        if [ -n "$LLAMA_PID" ]; then
+            kill -9 "$LLAMA_PID" 2>/dev/null || true
+            echo -e "${CYAN}Stopped local llama-server.${RESET}"
+        fi
+        rm -f "$HERMES_HOME/llama-server.pid"
+    fi
 }
 
 # ---------------------------------------------------------------------------

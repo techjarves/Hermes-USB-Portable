@@ -401,6 +401,19 @@ Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
-Write-Host "   Setup Complete! Launching Hermes..." -ForegroundColor Green
+Write-Host "   Setup Complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Start-Sleep -Seconds 1
+
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "   Local Offline LLM Setup" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Would you like to set up a local model (llama.cpp) now?" -ForegroundColor White
+Write-Host "This will open a web browser configuration tool to automatically scan your"
+Write-Host "hardware (VRAM, CPU) and download/configure the best model for your system."
+$choice = Read-Host "Configure local LLM? (y/n) [n]"
+if ($choice -match '^[yY]') {
+    Write-Host "Launching local configuration server..." -ForegroundColor Cyan
+    & $venvPython (Join-Path $Root "scripts\local_setup_server.py")
+}

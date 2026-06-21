@@ -4,3 +4,5 @@ data/
 src/
 *.flag
 *.log
+__pycache__
+/.agents

@@ -396,6 +396,12 @@ fi
 # but it can fail silently in some environments. Pre-install here
 # so Telegram works out of the box.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hermes [all] intentionally excludes messaging deps for size.
+# The lazy-install system is supposed to auto-install on first use,
+# but it can fail silently in some environments. Pre-install here
+# so Telegram works out of the box.
+# ---------------------------------------------------------------------------
 step "Installing messaging dependencies (Telegram) ..."
 if ! "$UV_EXE" pip install --python "$VENV_PYTHON" --link-mode=copy "python-telegram-bot[webhooks]==22.6" 2>/dev/null; then
   if ! "$VENV_PYTHON" -m pip install "python-telegram-bot[webhooks]==22.6" 2>/dev/null; then
@@ -426,6 +432,19 @@ rm -rf "$TMP_DIR"
 
 echo ""
 echo "========================================"
-echo "   Setup Complete! Launching Hermes..."
+echo "   Setup Complete!"
 echo "========================================"
 sleep 1
+
+echo ""
+echo "========================================"
+echo "   Local Offline LLM Setup"
+echo "========================================"
+echo "Would you like to set up a local model (llama.cpp) now?"
+echo "This will open a web browser configuration tool to automatically scan your"
+echo "hardware (VRAM, CPU) and download/configure the best model for your system."
+read -p "Configure local LLM? (y/n) [n]: " choice
+if [[ "$choice" =~ ^[yY] ]]; then
+  echo "Launching local configuration server..."
+  "$VENV_PYTHON" "$PORTABLE_ROOT/scripts/local_setup_server.py"
+fi

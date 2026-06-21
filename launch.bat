@@ -87,6 +87,28 @@ if /I "%~1"=="hermes" (
     set "ARGS=%ARGS:~7%"
 )
 
+if /I "%~1"=="start-server" (
+    for /f %%a in ('echo prompt $E ^| cmd') do set "ESC=%%a"
+    set "RESET=!ESC![0m"
+    set "CYAN=!ESC![36m"
+    set "YELLOW=!ESC![33m"
+    set "RED=!ESC![31m"
+    set "BRIGHT_GREEN=!ESC![92m"
+    set "GREEN=!ESC![32m"
+    set "PROVIDER_NAME=custom"
+    call :ensure_llama_server
+    exit /b
+)
+
+if /I "%~1"=="stop-server" (
+    for /f %%a in ('echo prompt $E ^| cmd') do set "ESC=%%a"
+    set "RESET=!ESC![0m"
+    set "CYAN=!ESC![36m"
+    set "PROVIDER_NAME=custom"
+    call :stop_llama_server
+    exit /b
+)
+
 REM If explicit arguments were passed, run Hermes directly (skip menu)
 if not "%ARGS%"=="" (
     python -c "from hermes_cli.main import main; main()" %ARGS%
@@ -134,10 +156,35 @@ if exist "%HERMES_HOME%\.env" (
 
 if exist "%HERMES_HOME%\config.yaml" (
     for /f "usebackq tokens=2 delims=: " %%a in (`findstr /R /C:"^  provider:" "%HERMES_HOME%\config.yaml"`) do (
-        if not defined PROVIDER_NAME set "PROVIDER_NAME=%%a"
+        if not defined PROVIDER_NAME (
+            set "raw_prov=%%a"
+            set "PROVIDER_NAME=!raw_prov:"=!"
+        )
     )
     for /f "usebackq tokens=2 delims=: " %%a in (`findstr /R /C:"^  default:" "%HERMES_HOME%\config.yaml"`) do (
-        if not defined MODEL_NAME set "MODEL_NAME=%%a"
+        if not defined MODEL_NAME (
+            set "raw_mod=%%a"
+            set "MODEL_NAME=!raw_mod:"=!"
+        )
+    )
+)
+
+set "LLAMA_STATUS=Stopped"
+set "LLAMA_ICON=[ ]"
+set "LLAMA_COLOR=%GRAY%"
+set "LLAMA_PID="
+if exist "%HERMES_HOME%\llama-server.pid" (
+    set /p LLAMA_PID=<"%HERMES_HOME%\llama-server.pid"
+)
+if defined LLAMA_PID (
+    tasklist /FI "PID eq !LLAMA_PID!" 2>nul | findstr /I "!LLAMA_PID!" >nul
+    if not errorlevel 1 (
+        set "LLAMA_STATUS=Running (PID !LLAMA_PID!)"
+        set "LLAMA_ICON=[OK]"
+        set "LLAMA_COLOR=%BRIGHT_GREEN%"
+    ) else (
+        set "LLAMA_STATUS=Stopped"
+        del "%HERMES_HOME%\llama-server.pid" >nul 2>&1
     )
 )
 
@@ -187,11 +234,13 @@ echo  %DIM%Setup%RESET%    !SETUP_COLOR!!SETUP_ICON!%RESET% %WHITE%!SETUP_STATUS
 if defined PROVIDER_NAME echo  %DIM%Provider%RESET% %CYAN%!PROVIDER_NAME!%RESET%
 if defined MODEL_NAME echo  %DIM%Model%RESET%    %WHITE%!MODEL_NAME!%RESET%
 echo  %DIM%Gateway%RESET%  !GATEWAY_COLOR!!GATEWAY_ICON!%RESET% %WHITE%!GATEWAY_STATUS!%RESET%
+if "!PROVIDER_NAME!"=="custom" echo  %DIM%Llama Srv%RESET% !LLAMA_COLOR!!LLAMA_ICON!%RESET% %WHITE%!LLAMA_STATUS!%RESET%
 echo  %DIM%Version%RESET%  %GRAY%v!HERMES_VERSION!%RESET%
 echo.
 echo %BRIGHT_CYAN%----------------------------------------------------------------%RESET%
 echo.
 echo  %BRIGHT_YELLOW%[1]%RESET%  %WHITE%Start Hermes Chat%RESET%
+echo  %BRIGHT_YELLOW%[D]%RESET%  %WHITE%Start Hermes Desktop%RESET%
 echo  %BRIGHT_YELLOW%[2]%RESET%  %WHITE%Setup / Reconfigure Hermes%RESET%
 if "!GATEWAY_STATUS!"=="Running (PID !GATEWAY_PID!)" (
     echo  %BRIGHT_YELLOW%[3]%RESET%  %WHITE%Stop Gateway%RESET%  %RED%[live]%RESET%
@@ -199,12 +248,15 @@ if "!GATEWAY_STATUS!"=="Running (PID !GATEWAY_PID!)" (
     echo  %BRIGHT_YELLOW%[3]%RESET%  %WHITE%Start Gateway%RESET%
 )
 echo  %BRIGHT_YELLOW%[4]%RESET%  %WHITE%Advanced Options%RESET%  %GRAY%--^>%RESET%
+echo  %BRIGHT_YELLOW%[L]%RESET%  %WHITE%Setup Local LLM (llama.cpp)%RESET%
 echo  %BRIGHT_YELLOW%[5]%RESET%  %GRAY%Exit%RESET%
 echo.
 echo %BRIGHT_CYAN%----------------------------------------------------------------%RESET%
 echo.
 
-echo %BRIGHT_CYAN%Select option:%RESET% & choice /C 12345 /N
+echo %BRIGHT_CYAN%Select option:%RESET% & choice /C 12345LD /N
+if errorlevel 7 goto :menu_desktop
+if errorlevel 6 goto :menu_local_setup
 if errorlevel 5 goto :menu_exit
 if errorlevel 4 goto :show_advanced
 if errorlevel 3 goto :menu_gateway
@@ -217,7 +269,10 @@ REM Menu Actions
 REM ---------------------------------------------------------------------------
 :menu_chat
 echo.
+call :ensure_llama_server
+if errorlevel 1 goto :show_menu
 python -c "from hermes_cli.main import main; main()"
+call :stop_llama_server
 goto :show_menu
 
 :menu_setup
@@ -228,10 +283,13 @@ goto :detect_status
 :menu_gateway
 if "!GATEWAY_STATUS!"=="Running (PID !GATEWAY_PID!)" (
     python -c "from hermes_cli.main import main; main()" gateway stop
+    call :stop_llama_server
     echo.
     echo %BRIGHT_GREEN%Gateway stopped.%RESET%
 ) else (
     echo.
+    call :ensure_llama_server
+    if errorlevel 1 goto :show_menu
     echo %CYAN%Starting gateway in background ...%RESET%
     start "" python -c "from hermes_cli.main import main; main()" gateway
     timeout /t 2 /nobreak >nul
@@ -239,12 +297,134 @@ if "!GATEWAY_STATUS!"=="Running (PID !GATEWAY_PID!)" (
 pause
 goto :detect_status
 
+:menu_desktop
+echo.
+call :ensure_llama_server
+if errorlevel 1 goto :show_menu
+echo %CYAN%Starting Hermes Desktop app ...%RESET%
+python -c "from hermes_cli.main import main; main()" desktop
+call :stop_llama_server
+goto :detect_status
+
+:menu_local_setup
+echo.
+python "%PORTABLE_ROOT%\scripts\local_setup_server.py"
+goto :detect_status
+
 :menu_exit
 echo.
 echo.
+if not "!GATEWAY_STATUS!"=="Running (PID !GATEWAY_PID!)" (
+    call :stop_llama_server
+)
 echo %GRAY%Goodbye!%RESET%
 echo.
 exit /b
+
+:ensure_llama_server
+if /I "!PROVIDER_NAME!"=="custom" (
+    if exist "%HERMES_HOME%\config.yaml" (
+        powershell -Command "Get-Content '%HERMES_HOME%\config.yaml' | ForEach-Object { $_ -replace '127.0.0.1:11434/v1', '127.0.0.1:39600/v1' -replace 'localhost:11434/v1', '127.0.0.1:39600/v1' } | Set-Content '%HERMES_HOME%\config.yaml.tmp'; Move-Item -Force '%HERMES_HOME%\config.yaml.tmp' '%HERMES_HOME%\config.yaml'"
+    )
+    if exist "%HERMES_HOME%\llama-server.pid" (
+        set /p LLAMA_PID=<"%HERMES_HOME%\llama-server.pid"
+    )
+    set "RUNNING="
+    if defined LLAMA_PID (
+        tasklist /FI "PID eq !LLAMA_PID!" 2>nul | findstr /I "!LLAMA_PID!" >nul
+        if not errorlevel 1 set "RUNNING=1"
+    )
+    if not defined RUNNING (
+        echo %CYAN%Starting local llama-server in background ...%RESET%
+        
+        set "MODEL_FILE="
+        for /f "usebackq tokens=2 delims=: " %%a in (`findstr /R /C:"^  default:" "%HERMES_HOME%\config.yaml"`) do (
+            set "raw_model=%%a"
+            set "MODEL_FILE=!raw_model:custom/=!"
+            set "MODEL_FILE=!MODEL_FILE:"=!"
+        )
+        
+        set "MODEL_PATH="
+        if defined MODEL_FILE (
+            if exist "%HERMES_HOME%\models\!MODEL_FILE!" (
+                set "MODEL_PATH=%HERMES_HOME%\models\!MODEL_FILE!"
+            ) else (
+                for /r "%HERMES_HOME%\models" %%f in (*.gguf) do (
+                    if "%%~nxf"=="!MODEL_FILE!" (
+                        set "MODEL_PATH=%%f"
+                    )
+                )
+            )
+        )
+        
+        if not defined MODEL_PATH (
+            echo %YELLOW%Warning: Configured model "!MODEL_FILE!" not found. Fallback to first GGUF found.%RESET%
+            for /r "%HERMES_HOME%\models" %%f in (*.gguf) do (
+                if not defined MODEL_PATH set "MODEL_PATH=%%f"
+            )
+        )
+        
+        if not defined MODEL_PATH (
+            echo %RED%Error: No GGUF model file configured or found. Run [L] to configure.%RESET%
+            pause
+            exit /b 1
+        )
+        
+        set "SERVER_EXE=%CACHE_DIR%\runtimes\llama-server\llama-server.exe"
+        if not exist "!SERVER_EXE!" (
+            echo %RED%Error: llama-server executable not found at !SERVER_EXE!. Run [L] to setup.%RESET%
+            pause
+            exit /b 1
+        )
+        
+        set "GPU_ARGS="
+        if exist "C:\Windows\System32\nvcuda.dll" (
+            echo %BRIGHT_GREEN%NVIDIA GPU detected. Enabling GPU acceleration ^(offloading layers to VRAM^).%RESET%
+            set "GPU_ARGS=-ngl 99"
+        )
+        
+        set "CTX_LEN=32768"
+        if exist "%HERMES_HOME%\config.yaml" (
+            for /f "usebackq tokens=2 delims=: " %%a in (`findstr /R /C:"^  context_length:" "%HERMES_HOME%\config.yaml"`) do (
+                set "raw_ctx=%%a"
+                set "CTX_LEN=!raw_ctx:"=!"
+            )
+        )
+        
+        for /f "usebackq" %%p in (`powershell -Command "Start-Process -FilePath '!SERVER_EXE!' -ArgumentList '-m \"!MODEL_PATH!\" -c !CTX_LEN! -np 1 --port 39600 --host 127.0.0.1 --jinja !GPU_ARGS! --no-warmup' -RedirectStandardError '!HERMES_HOME!\logs\llama-server.err' -WindowStyle Hidden -PassThru | Select-Object -ExpandProperty Id"`) do (
+            set "NEW_LLAMA_PID=%%p"
+        )
+        
+        if defined NEW_LLAMA_PID (
+            echo !NEW_LLAMA_PID!>"%HERMES_HOME%\llama-server.pid"
+            echo %BRIGHT_GREEN%llama-server started with PID !NEW_LLAMA_PID!.%RESET%
+            echo %CYAN%Waiting for llama-server to be ready...%RESET%
+            powershell -Command "$start = Get-Date; while ((Get-Date) - $start -lt [TimeSpan]::FromSeconds(90)) { try { $res = Invoke-RestMethod -Uri 'http://127.0.0.1:39600/health' -ErrorAction SilentlyContinue; if ($res -and $res.status -eq 'ok') { exit 0 } } catch {} Start-Sleep -Seconds 1 }; exit 1"
+            if !errorlevel! neq 0 (
+                echo %RED%Error: llama-server failed to become ready in time.%RESET%
+                pause
+                exit /b 1
+            )
+            echo %GREEN%llama-server is ready.%RESET%
+        ) else (
+            echo %RED%Error: Failed to start llama-server.%RESET%
+            pause
+            exit /b 1
+        )
+    )
+)
+exit /b 0
+
+:stop_llama_server
+if exist "%HERMES_HOME%\llama-server.pid" (
+    set /p LLAMA_PID=<"%HERMES_HOME%\llama-server.pid"
+    if defined LLAMA_PID (
+        taskkill /PID !LLAMA_PID! /F >nul 2>&1
+        echo %CYAN%Stopped local llama-server.%RESET%
+    )
+    del "%HERMES_HOME%\llama-server.pid" >nul 2>&1
+)
+exit /b 0
 
 REM ---------------------------------------------------------------------------
 REM Advanced Menu

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes Portable - Local LLM Configurator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="logo-area">
+                <span class="logo-icon">🛸</span>
+                <div>
+                    <h1>HERMES PORTABLE</h1>
+                    <p class="subtitle">Offline Local LLM Configurator</p>
+                </div>
+            </div>
+            <div class="status-badge" id="system-badge">System Unchecked</div>
+        </header>
+
+        <!-- Main Card Container -->
+        <main class="card">
+            <!-- STEP 1: Welcome & Auto-Detect -->
+            <section id="step-welcome" class="step-section active">
+                <div class="welcome-content">
+                    <h2>Run 100% Offline with GPU Acceleration</h2>
+                    <p>Hermes Portable can run local language models directly on your hardware. We will automatically download an optimized version of <strong>llama.cpp</strong> server and your chosen model in GGUF format.</p>
+                    
+                    <div class="detect-box">
+                        <button id="btn-detect" class="btn btn-primary">
+                            <span>Scan Hardware & Detect GPU</span>
+                            <span class="btn-glow"></span>
+                        </button>
+                        <div id="detect-loading" class="spinner-container hidden">
+                            <div class="spinner"></div>
+                            <p>Analyzing CPU, RAM, and GPU capabilities...</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- STEP 2: System Specs & Model Selection -->
+            <section id="step-select" class="step-section">
+                <div class="specs-grid">
+                    <div class="spec-card">
+                        <span class="spec-icon">💻</span>
+                        <div class="spec-info">
+                            <label>Operating System</label>
+                            <span id="spec-os">-</span>
+                        </div>
+                    </div>
+                    <div class="spec-card">
+                        <span class="spec-icon">🧠</span>
+                        <div class="spec-info">
+                            <label>System CPU & RAM</label>
+                            <span id="spec-cpu">-</span>
+                        </div>
+                    </div>
+                    <div class="spec-card">
+                        <span class="spec-icon">⚡</span>
+                        <div class="spec-info">
+                            <label>Graphics Card (GPU)</label>
+                            <span id="spec-gpu">-</span>
+                        </div>
+                    </div>
+                    <div class="spec-card">
+                        <span class="spec-icon">🛠️</span>
+                        <div class="spec-info">
+                            <label>Acceleration Mode</label>
+                            <span id="spec-backend" class="badge badge-accent">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="model-selection-area">
+                    <h2>Select a Recommended GGUF Model</h2>
+                    <p class="section-desc">Based on your hardware, we've ranked the best models for speed and quality. Recommended models will load and run smoothly.</p>
+                    
+                    <div class="model-list" id="model-cards-container">
+                        <!-- Model cards will be dynamically injected here -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- STEP 3: Downloading & Extraction Progress -->
+            <section id="step-install" class="step-section">
+                <div class="install-container">
+                    <h2 id="install-title">Downloading llama.cpp Server...</h2>
+                    <p id="install-desc" class="section-desc">Please keep this browser window open. We are setting up runtime libraries inside your portable directory.</p>
+
+                    <div class="progress-area">
+                        <div class="progress-meta">
+                            <span id="progress-file">llama-server.zip</span>
+                            <span id="progress-percent">0%</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="progress-bar-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-stats">
+                            <span id="progress-downloaded">0 MB / 0 MB</span>
+                            <span id="progress-speed">0.00 MB/s</span>
+                        </div>
+                    </div>
+
+                    <div class="console-box" id="console-logs">
+                        <div class="log-line text-cyan">[SYSTEM] Initializing installation sequence...</div>
+                        <!-- Log lines will be appended here -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- STEP 4: Configuration Success -->
+            <section id="step-success" class="step-section">
+                <div class="success-content">
+                    <div class="success-icon">✓</div>
+                    <h2>Setup Complete & Configured!</h2>
+                    <p>Hermes Portable is now configured to run locally. We've set up your local endpoint at <strong>http://127.0.0.1:39600/v1</strong> and written the configuration to your portable profile.</p>
+                    
+                    <div class="summary-box">
+                        <div class="summary-item">
+                            <span class="label">Local Server:</span>
+                            <span class="val text-green">llama-server (b4600)</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="label">Active Model:</span>
+                            <span class="val text-cyan" id="success-model-name">-</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="label">Config File:</span>
+                            <span class="val">data/config.yaml</span>
+                        </div>
+                    </div>
+
+                    <button id="btn-finish" class="btn btn-success">
+                        <span>Launch Hermes & Start Chatting</span>
+                    </button>
+                </div>
+            </section>
+        </main>
+        
+        <footer>
+            <p>Nous Research Hermes Agent &bull; Standalone Portable Setup</p>
+        </footer>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
