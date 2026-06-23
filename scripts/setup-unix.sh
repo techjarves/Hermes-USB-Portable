@@ -99,16 +99,27 @@ arm64) PYTHON_ARCH="aarch64" ;;
 *) PYTHON_ARCH="$ARCH_RAW" ;;
 esac
 
+# NOTE: python-build-standalone tags publish builds for ALL platforms
+# (windows/linux/macos, x64+arm64) in a single unified release snapshot.
+# We pin to the SAME tag on every OS to avoid ABI/behaviour drift.
+# Windows (setup-windows.ps1) uses the same 20260602 tag — keep them in sync.
 if [ "$PLATFORM" = "macos" ]; then
-  PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.11.15+20260510-${PYTHON_ARCH}-apple-darwin-install_only.tar.gz"
-  NODE_URL="https://nodejs.org/dist/v22.14.0/node-v22.14.0-darwin-${ARCH}.tar.gz"
-  UV_URL="https://github.com/astral-sh/uv/releases/download/0.7.8/uv-${PYTHON_ARCH}-apple-darwin.tar.gz"
-  RG_URL="https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-${PYTHON_ARCH}-apple-darwin.tar.gz"
+  PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15+20260602-${PYTHON_ARCH}-apple-darwin-install_only.tar.gz"
+  NODE_URL="https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-${ARCH}.tar.gz"
+  UV_URL="https://github.com/astral-sh/uv/releases/download/0.11.19/uv-${PYTHON_ARCH}-apple-darwin.tar.gz"
+  RG_URL="https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-${PYTHON_ARCH}-apple-darwin.tar.gz"
 else
-  PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.11.15+20260510-${ARCH_RAW}-unknown-linux-gnu-install_only.tar.gz"
-  NODE_URL="https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-${ARCH}.tar.xz"
-  UV_URL="https://github.com/astral-sh/uv/releases/download/0.7.8/uv-${ARCH_RAW}-unknown-linux-gnu.tar.gz"
-  RG_URL="https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-${ARCH_RAW}-unknown-linux-musl.tar.gz"
+  PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15+20260602-${ARCH_RAW}-unknown-linux-gnu-install_only.tar.gz"
+  NODE_URL="https://nodejs.org/dist/v22.22.3/node-v22.22.3-linux-${ARCH}.tar.xz"
+  UV_URL="https://github.com/astral-sh/uv/releases/download/0.11.19/uv-${ARCH_RAW}-unknown-linux-gnu.tar.gz"
+  # ripgrep 15.1.0 ships a `musl` flavour only for x86_64; arm64 (aarch64)
+  # only has the `gnu` flavour. Pick accordingly or setup fails silently on
+  # Linux ARM64 and Hermes falls back to plain grep.
+  if [ "$ARCH_RAW" = "aarch64" ]; then
+    RG_URL="https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-${ARCH_RAW}-unknown-linux-gnu.tar.gz"
+  else
+    RG_URL="https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-${ARCH_RAW}-unknown-linux-musl.tar.gz"
+  fi
 fi
 
 SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/heads/main.tar.gz"
@@ -269,8 +280,8 @@ if download "$RG_URL" "$RG_ARCHIVE"; then
     cp "$TMP_DIR/rg/rg" "$BIN_DIR/rg"
     chmod +x "$BIN_DIR/rg"
     done_msg "ripgrep ready"
-  elif [ -f "$TMP_DIR/rg/ripgrep-14.1.1-*/rg" ]; then
-    cp "$TMP_DIR/rg/ripgrep-"*/rg "$BIN_DIR/rg"
+  elif [ -f "$TMP_DIR/rg"/ripgrep-*/rg ]; then
+    cp "$TMP_DIR/rg"/ripgrep-*/rg "$BIN_DIR/rg"
     chmod +x "$BIN_DIR/rg"
     done_msg "ripgrep ready"
   else

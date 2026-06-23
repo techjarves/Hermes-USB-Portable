@@ -119,9 +119,14 @@ if [ ! -x "$VIRTUAL_ENV/bin/python" ]; then
         -e "$SRC_DIR/hermes-agent[all]" \
         "python-telegram-bot[webhooks]==22.6" 2>/dev/null; then
         "$VIRTUAL_ENV/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
-        "$VIRTUAL_ENV/bin/python" -m pip install \
-            -e "$SRC_DIR/hermes-agent[all]" \
-            "python-telegram-bot[webhooks]==22.6" 2>/dev/null || true
+        if ! "$VIRTUAL_ENV/bin/python" -m pip install \
+                -e "$SRC_DIR/hermes-agent[all]" \
+                "python-telegram-bot[webhooks]==22.6"; then
+            echo ""
+            echo "[ERROR] Failed to rebuild venv dependencies."
+            echo "        Delete .cache and run launch.sh again to restart setup."
+            exit 1
+        fi
     fi
     echo "[OK]    Venv rebuilt."
 fi
@@ -145,12 +150,17 @@ mkdir -p "$HOME"
 # ---------------------------------------------------------------------------
 # Launch Hermes
 # ---------------------------------------------------------------------------
+# Switch off 'errexit' for the interactive menu: a non-zero exit from the
+# `hermes` TUI (Ctrl+C, /exit with error, command error) must NOT terminate
+# the launcher. Setup/venv above still ran under `set -e` for safety.
+set +e
+
 if [ ! -d "$SRC_DIR/hermes-agent" ]; then
     echo "[ERROR] Hermes source not found. Please delete .cache and try again."
     exit 1
 fi
 
-cd "$SRC_DIR/hermes-agent"
+cd "$SRC_DIR/hermes-agent" || exit 1
 
 # Strip "hermes" from the start of arguments if user typed "launch.sh hermes setup"
 if [ "$1" = "hermes" ] || [ "$1" = "HERMES" ]; then
@@ -160,7 +170,7 @@ fi
 # If explicit arguments were passed, run Hermes directly (skip menu)
 if [ $# -gt 0 ]; then
     hermes "$@"
-    exit 0
+    exit $?
 fi
 
 # ---------------------------------------------------------------------------
@@ -360,6 +370,17 @@ menu_exit() {
 }
 
 ensure_llama_server() {
+    # Only start a local llama-server when the custom provider points to a
+    # LOCAL endpoint (127.0.0.1 / localhost — i.e. Ollama / llama.cpp). A
+    # remote custom endpoint (e.g. OpenCode Go at opencode.ai) is a cloud
+    # API and must NOT spawn a local llama-server, otherwise it crashes with
+    # "No GGUF found" and also rewrites config.yaml with the wrong port.
+    if [ "$PROVIDER_NAME" = "custom" ] && [ -f "$HERMES_HOME/config.yaml" ]; then
+        CB_URL=$(grep '^  base_url:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' || true)
+        if [ -n "$CB_URL" ] && ! echo "$CB_URL" | grep -qiE '127\.0\.0\.1|localhost'; then
+            return 0
+        fi
+    fi
     if [ "$PROVIDER_NAME" = "custom" ]; then
         if [ -f "$HERMES_HOME/config.yaml" ]; then
             if [[ "$OSTYPE" == "darwin"* ]]; then

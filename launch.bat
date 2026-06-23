@@ -44,6 +44,13 @@ REM Environment isolation - keep everything inside the portable folder
 REM ---------------------------------------------------------------------------
 set "VIRTUAL_ENV=%RUNTIME_DIR%\venv"
 set "PATH=%VIRTUAL_ENV%\Scripts;%RUNTIME_DIR%\python;%RUNTIME_DIR%\python\Scripts;%RUNTIME_DIR%\node;%RUNTIME_DIR%\uv;%RUNTIME_DIR%\bin;%PATH%"
+
+REM Make portable MinGit available (hermes update / git-based tools) if it was installed
+if exist "%RUNTIME_DIR%\git\cmd\git.exe" (
+    set "PATH=%RUNTIME_DIR%\git\cmd;%RUNTIME_DIR%\git\mingw64\bin;%PATH%"
+    set "GIT_EXEC_PATH=%RUNTIME_DIR%\git\mingw64\libexec\git-core"
+    set "GIT_CONFIG_NOSYSTEM=1"
+)
 set "PYTHONNOUSERSITE=1"
 set "PYTHONHOME="
 set "PYTHONPATH="
@@ -322,6 +329,22 @@ echo.
 exit /b
 
 :ensure_llama_server
+REM Only start a local llama-server when the custom provider points to a
+REM LOCAL endpoint (127.0.0.1 / localhost — i.e. Ollama / llama.cpp). A remote
+REM custom endpoint (e.g. OpenCode Go at opencode.ai) is a cloud API and must
+REM NOT spawn a local llama-server, otherwise it crashes with "No GGUF found"
+REM and also rewrites config.yaml with the wrong port.
+set "_CB_URL="
+if /I "!PROVIDER_NAME!"=="custom" (
+    for /f "usebackq tokens=2 delims=: " %%a in (`findstr /R /C:"^  base_url:" "%HERMES_HOME%\config.yaml" 2^>nul`) do (
+        if not defined _CB_URL set "_CB_URL=%%a"
+    )
+)
+if defined _CB_URL (
+    echo !_CB_URL! | findstr /I "127.0.0.1 localhost" >nul
+    if errorlevel 1 exit /b 0
+)
+
 if /I "!PROVIDER_NAME!"=="custom" (
     if exist "%HERMES_HOME%\config.yaml" (
         powershell -Command "Get-Content '%HERMES_HOME%\config.yaml' | ForEach-Object { $_ -replace '127.0.0.1:11434/v1', '127.0.0.1:39600/v1' -replace 'localhost:11434/v1', '127.0.0.1:39600/v1' } | Set-Content '%HERMES_HOME%\config.yaml.tmp'; Move-Item -Force '%HERMES_HOME%\config.yaml.tmp' '%HERMES_HOME%\config.yaml'"
