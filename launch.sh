@@ -370,6 +370,17 @@ menu_exit() {
 }
 
 ensure_llama_server() {
+    # Only start a local llama-server when the custom provider points to a
+    # LOCAL endpoint (127.0.0.1 / localhost — i.e. Ollama / llama.cpp). A
+    # remote custom endpoint (e.g. OpenCode Go at opencode.ai) is a cloud
+    # API and must NOT spawn a local llama-server, otherwise it crashes with
+    # "No GGUF found" and also rewrites config.yaml with the wrong port.
+    if [ "$PROVIDER_NAME" = "custom" ] && [ -f "$HERMES_HOME/config.yaml" ]; then
+        CB_URL=$(grep '^  base_url:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' || true)
+        if [ -n "$CB_URL" ] && ! echo "$CB_URL" | grep -qiE '127\.0\.0\.1|localhost'; then
+            return 0
+        fi
+    fi
     if [ "$PROVIDER_NAME" = "custom" ]; then
         if [ -f "$HERMES_HOME/config.yaml" ]; then
             if [[ "$OSTYPE" == "darwin"* ]]; then
