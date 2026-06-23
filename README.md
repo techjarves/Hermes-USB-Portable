@@ -129,7 +129,7 @@ Alternatively, you can select option **`[2]` (Setup / Reconfigure)** in the Laun
 Hermes Portable can use an Ollama server that is already running on the same computer. Start Ollama first, then pull a model:
 
 ```bash
-ollama pull qwen3.6
+ollama pull qwen3
 ```
 
 Launch Hermes Portable and choose **`[2]` Setup / Reconfigure Hermes**. In the Hermes setup wizard:
@@ -244,6 +244,15 @@ Keep your agent up-to-date with the latest improvements from Nous Research:
 
 *   Older USB 2.0 drives have slow read/write speeds, which bottleneck Python's modules import.
 *   **Solution**: Upgrade to a **USB 3.0 / 3.1** drive, or an **external SSD** for optimal performance.
+</details>
+
+<details>
+<summary><strong> Should I format my USB drive as NTFS, exFAT, or FAT32?</strong></summary>
+
+*   **NTFS is recommended** for Windows-only drives: faster setup, smaller disk footprint (the install uses hardlinks when the filesystem supports them) and better reliability if the drive is unplugged unsafely.
+*   **exFAT works** and is required if you share the same drive across Windows **and** macOS, but it forces copy-mode installs (slower setup, more disk usage) and provides no hardlinks or ACLs. On the first run you will see an informational warning in the setup console — this is expected and non-blocking.
+*   **FAT32 is not recommended**: individual files in the runtime can exceed the 4 GB limit and setup will fail.
+*   **Solution (Windows-only drive)**: reformat the drive as **NTFS**. **macOS-only drive**: **APFS**. **Linux-only drive**: **ext4**.
 </details>
 
 <details>
