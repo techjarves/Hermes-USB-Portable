@@ -228,6 +228,28 @@ if (Test-Path $readyFlag) {
 }
 
 # ---------------------------------------------------------------------------
+# Filesystem check: warn (do not block) if the portable drive is not NTFS.
+# exFAT/FAT32 work but force copy-mode installs (more disk space, slower
+# startup) and offer no hardlinks/ACLs. NTFS is recommended.
+# ---------------------------------------------------------------------------
+if ($Root -match '^([A-Za-z]):[\\/]') {
+    $driveLetter = $Matches[1]
+    try {
+        $vol = Get-Volume -DriveLetter $driveLetter -ErrorAction Stop
+        $fsType = $vol.FileSystemType
+        if ($fsType -and ($fsType -ine 'NTFS') -and ($fsType -ine 'ReFS')) {
+            Write-Warn "Portable drive (${driveLetter}:) is formatted as '$fsType'."
+            Write-Host "        This works, but NTFS is recommended for better performance and reliability." -ForegroundColor Yellow
+            Write-Host "        exFAT/FAT32 force copy-mode installs (slower setup, more disk usage) and" -ForegroundColor Yellow
+            Write-Host "        lack hardlinks/ACLs. Consider reformatting the drive as NTFS." -ForegroundColor Yellow
+            Write-Host "        Continuing setup anyway ..." -ForegroundColor Yellow
+        }
+    } catch {
+        # Could not determine filesystem (e.g. network/UNC path) - silently skip.
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 1. Portable Python
 # ---------------------------------------------------------------------------
 Write-Step "Installing portable Python 3.11 ..."
