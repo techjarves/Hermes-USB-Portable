@@ -44,6 +44,13 @@ REM Environment isolation - keep everything inside the portable folder
 REM ---------------------------------------------------------------------------
 set "VIRTUAL_ENV=%RUNTIME_DIR%\venv"
 set "PATH=%VIRTUAL_ENV%\Scripts;%RUNTIME_DIR%\python;%RUNTIME_DIR%\python\Scripts;%RUNTIME_DIR%\node;%RUNTIME_DIR%\uv;%RUNTIME_DIR%\bin;%PATH%"
+
+REM Make portable MinGit available (hermes update / git-based tools) if it was installed
+if exist "%RUNTIME_DIR%\git\cmd\git.exe" (
+    set "PATH=%RUNTIME_DIR%\git\cmd;%RUNTIME_DIR%\git\mingw64\bin;%PATH%"
+    set "GIT_EXEC_PATH=%RUNTIME_DIR%\git\mingw64\libexec\git-core"
+    set "GIT_CONFIG_NOSYSTEM=1"
+)
 set "PYTHONNOUSERSITE=1"
 set "PYTHONHOME="
 set "PYTHONPATH="
