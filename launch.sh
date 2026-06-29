@@ -115,12 +115,19 @@ if [ ! -x "$VIRTUAL_ENV/bin/python" ]; then
     if ! "$UV_EXE" venv "$VIRTUAL_ENV" --python "$PYTHON_EXE" --seed 2>/dev/null; then
         "$UV_EXE" venv "$VIRTUAL_ENV" --python "$PYTHON_EXE"
     fi
+    # NOTE: This install list must stay in sync with scripts/setup-unix.sh
+    # (steps 8, 9, 10). setup-unix.sh installs core + anthropic + telegram
+    # because [all] is deliberately not exhaustive. The rebuild path here
+    # replicates the same three packages; drift between the two paths is
+    # the root cause of "library not installed" errors after reboot.
     if ! "$UV_EXE" pip install --python "$VIRTUAL_ENV/bin/python" --link-mode=copy \
         -e "$SRC_DIR/hermes-agent[all]" \
+        "anthropic>=0.39.0" \
         "python-telegram-bot[webhooks]==22.6" 2>/dev/null; then
         "$VIRTUAL_ENV/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
         "$VIRTUAL_ENV/bin/python" -m pip install \
             -e "$SRC_DIR/hermes-agent[all]" \
+            "anthropic>=0.39.0" \
             "python-telegram-bot[webhooks]==22.6" 2>/dev/null || true
     fi
     echo "[OK]    Venv rebuilt."
