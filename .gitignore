@@ -28,3 +28,11 @@ chrome-downloads/
 .fseventsd/
 System Volume Information/
 .Spotlight-V100/
+
+# Universal Dual Boot artifacts (Ubuntu ISO + Ventoy bootloader). The helper
+# scripts (setup-live-ubuntu.sh, run-hermes.sh, README_HERMES.txt) ARE tracked.
+*.iso
+ventoy/
+
+# Restore kit images/backups that live on the same stick (multi-GB, private)
+Hermes-Restore/

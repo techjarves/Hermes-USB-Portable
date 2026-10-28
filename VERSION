@@ -1,17 +1,54 @@
 # Hermes-USB-Portable — version pin
 # Pairs the portable wrapper version with the exact bundled hermes-agent it ships.
 
-portable_version:        portable-v1.8.4
-hermes_agent_version:    0.16.0
+portable_version:        portable-v1.9.0
+hermes_agent_version:    0.22.5
+hermes_agent_ref:        v0.22.5
 hermes_agent_upstream:   NousResearch/hermes-agent
-hermes_agent_commit:     0bbf325a8f50cbc7cfc74886705e8a67bb521dad
-synced_on:               2026-06-16
+hermes_agent_commit:     bf0203a794a07aac3ff764972ab9087baa4e4f4e
+synced_on:               2026-10-28
 
-# Pinned portable runtimes (unchanged in v1.8.4 — all already latest):
-#   python:   3.13.14  (python-build-standalone 20260610, astral-sh)
-#   node:     24.16.0  (LTS "Krypton")
-#   uv:       0.11.21
-#   ripgrep:  15.1.0
+# `hermes_agent_ref` is the ONE pin every setup script and launcher reads
+# (setup-unix.sh, setup-windows.ps1, launch.sh, launch.bat). Bump it here and
+# the next launch on each machine downloads that release and rebuilds the venv.
+
+# Pinned portable runtimes (v1.9.0: Python moved to 3.14 — hermes-agent v0.22.x
+# marks its core deps python_version >= '3.14'; on 3.13 a chat dies with
+# "No module named 'ruamel'"):
+#   python:     3.14.9   (python-build-standalone 20261021 — same build the official installer ships)
+#   node:       24.16.0  (LTS "Krypton")
+#   uv:         0.11.21
+#   ripgrep:    15.1.0
+#   playwright: 1.64.1   (matches the chromium-1234 build already on the drive)
+
+# v1.9.0 — Mac fix, Claude subscription sign-in, pinned Hermes Agent release.
+#          (1) THE MAC BUG: data/.env carried HERMES_HOME=/run/media/<user>/HERMES/data
+#              and OBSIDIAN_VAULT_PATH from a Linux session. Hermes loads .env over
+#              the environment, so on macOS every chat died with
+#              "OSError: [Errno 30] Read-only file system: '/run'". launch.sh (and
+#              launch.bat) now strip HERMES_HOME from data/.env and re-point
+#              OBSIDIAN_VAULT_PATH at this drive's Brain/ on every launch.
+#          (2) CLAUDE SUBSCRIPTION: model menu [C] signs in with a Claude Pro/Max
+#              plan (`hermes auth add anthropic --type oauth`, browser + paste code).
+#              [G] signs in with a SuperGrok plan (`hermes auth add xai-oauth`,
+#              device code). Both logins live in data/auth.json on the drive and
+#              are the drive's OWN logins, so a token refresh never logs a Mac or
+#              PC install out. [P] lists every saved provider/model in
+#              data/config.yaml with its key/login status and switches to it.
+#          (3) PINNED SOURCE: setup fetched hermes-agent main HEAD and then reused
+#              the cached source.tar.gz forever, so the drive sat on v0.21.0 and
+#              Advanced > Update ran `hermes update`, which cannot update a tarball
+#              install. Now: source = the release tag in hermes_agent_ref, cached
+#              as source-<ref>.tar.gz, marked with src/hermes-agent/.portable-ref;
+#              a pin change forces setup on the next launch, and a venv stamp
+#              (.portable-ref inside the venv) refreshes dependencies when the venv
+#              predates the source. Advanced > Update = git pull + pin check.
+#          (4) LAUNCHER: errors inside a menu (chat, setup, sign-in, doctor) no
+#              longer kill the launcher (set -e); Hermes-Mac.command added for
+#              Finder double-click; deps follow upstream extras ([all,anthropic,
+#              telegram] -> python-telegram-bot 22.8) and playwright is pinned.
+#          Verified on macOS 26.7.2 (Apple Silicon) — see CHANGELOG.md.
+#          Windows: same pin + .env guard, NOT yet run on Windows.
 
 # v1.8.4 — macOS (Apple Silicon) verification of the v1.8.x stack + hermes-agent re-sync.
 #          The on-drive macos-arm64 cache was still the v1.8.1 build (hermes-agent

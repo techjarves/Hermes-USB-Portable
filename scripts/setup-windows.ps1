@@ -26,14 +26,27 @@ New-Item -ItemType Directory -Force -Path $RuntimeDir, $SrcDir, $BinDir, $TempDi
 # ---------------------------------------------------------------------------
 # Download URLs (pinned for reliability)
 # ---------------------------------------------------------------------------
-# portable-v1.8.0 (2026-06-13): bumped to latest; Python source moved from the
-# abandoned indygreg org to astral-sh. Python within hermes-agent >=3.11,<3.14.
-$PythonUrl  = "https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.13.14+20260610-x86_64-pc-windows-msvc-install_only.tar.gz"
+# portable-v1.9.0: Python 3.14.9 (python-build-standalone 20261021). hermes-agent
+# v0.22.x marks its core deps python_version >= '3.14'; 3.13 cannot run it.
+$PythonUrl  = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.14.9+20261021-x86_64-pc-windows-msvc-install_only.tar.gz"
 $NodeUrl    = "https://nodejs.org/dist/v24.16.0/node-v24.16.0-win-x64.zip"
 $UvUrl      = "https://github.com/astral-sh/uv/releases/download/0.11.21/uv-x86_64-pc-windows-msvc.zip"
 $RgUrl      = "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip"
 $GitUrl     = "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.1/MinGit-2.53.0-64-bit.zip"
-$SourceUrl  = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/main.zip"
+# Hermes Agent source is pinned to VERSION's hermes_agent_ref - the same pin
+# setup-unix.sh and both launchers read. The cached zip carries the ref, so a
+# new pin downloads fresh source instead of reusing an old source.zip.
+$HermesRef = "main"
+$verFile = Join-Path $Root "VERSION"
+if (Test-Path $verFile) {
+    $refLine = Select-String -Path $verFile -Pattern '^hermes_agent_ref:\s*(\S+)' | Select-Object -First 1
+    if ($refLine) { $HermesRef = $refLine.Matches[0].Groups[1].Value }
+}
+if ($HermesRef -eq "main") {
+    $SourceUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/main.zip"
+} else {
+    $SourceUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$HermesRef.zip"
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -223,7 +236,11 @@ if (Test-Path $readyFlag) {
 # 1. Portable Python
 # ---------------------------------------------------------------------------
 Write-Step "Installing portable Python 3.13 ..."
-$pyArchive = Join-Path $RuntimeDir "python.tar.gz"
+# Archive name carries the version so a bump never reuses an old python.tar.gz.
+$pyArchive = Join-Path $RuntimeDir "python-3.14.9.tar.gz"
+Get-ChildItem $RuntimeDir -Filter "python*.tar.gz" -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $pyArchive } |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 Download-File $PythonUrl $pyArchive
 Extract-TarGz $pyArchive (Join-Path $RuntimeDir "python")
 Write-Done "Python ready"
@@ -280,8 +297,12 @@ try {
 # ---------------------------------------------------------------------------
 # 6. Hermes source code
 # ---------------------------------------------------------------------------
-Write-Step "Downloading Hermes Agent source code ..."
-$srcArchive = Join-Path $RuntimeDir "source.zip"
+Write-Step "Downloading Hermes Agent source code ($HermesRef) ..."
+$srcArchive = Join-Path $RuntimeDir ("source-" + $HermesRef + ".zip")
+# Older pins' archives are 50-70 MB each on the stick - drop them.
+Get-ChildItem $RuntimeDir -Filter "source*.zip" -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $srcArchive } |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 Download-File $SourceUrl $srcArchive
 $srcTemp = Join-Path $TempDir "source"
 Extract-Zip $srcArchive $srcTemp
@@ -294,7 +315,10 @@ $destSrc = Join-Path $SrcDir "hermes-agent"
 # aborts setup if any file in src\hermes-agent is locked on a re-run (AV / indexer /
 # a running hermes). This degrades gracefully instead.
 Copy-DirectoryContents $srcSub.FullName $destSrc
-Write-Done "Source code ready"
+# Record which release is on the drive (read by launch.bat / launch.sh).
+# WriteAllText = UTF-8 without BOM and no newline, so every OS compares equal.
+[IO.File]::WriteAllText((Join-Path $destSrc ".portable-ref"), $HermesRef)
+Write-Done "Source code ready ($HermesRef)"
 
 # ---------------------------------------------------------------------------
 # 7. Create virtual environment
@@ -321,14 +345,53 @@ Write-Host "        This may take 3-10 minutes depending on your connection."
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
 
 # Try uv first (faster), fall back to pip on unsupported filesystem (e.g. ExFAT)
-# NOTE: "anthropic" is added explicitly — the kimi-coding / Anthropic providers
-# need the anthropic SDK, which hermes-agent[all] does NOT pull in.
-$uvResult = & $uvExe pip install --python $venvPython --link-mode=copy -e "$destSrc[all]" "anthropic>=0.39.0" 2>&1
-if ($LASTEXITCODE -ne 0) {
+# Locked install (same logic as scripts/install-deps.sh on macOS/Linux): export
+# the exact package set from upstream's uv.lock and install it as-is. uv.lock
+# carries upstream's override-dependencies (e.g. Pillow 13.0.0 over
+# browser-harness's pillow==12.3.0 pin); a fresh resolve of [all] fails with
+# ResolutionImpossible. editable_mode=compat: hermes-agent >= 0.22 builds its
+# root modules in setup.py and the default editable finder maps no packages.
+$reqFile = Join-Path $TempDir "hermes-requirements.txt"
+Remove-Item $reqFile -Force -ErrorAction SilentlyContinue
+$installed = $false
+if (Test-Path (Join-Path $destSrc "uv.lock")) {
+    & $uvExe export --frozen --no-hashes --no-emit-project --no-dev --extra all --extra anthropic --extra telegram --project $destSrc -o $reqFile 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        & $uvExe pip install --python $venvPython --link-mode=copy --no-deps -r $reqFile
+        if ($LASTEXITCODE -eq 0) {
+            & $uvExe pip install --python $venvPython --link-mode=copy --no-deps -C editable_mode=compat -e $destSrc
+            if ($LASTEXITCODE -eq 0) { $installed = $true }
+        }
+    }
+}
+if (-not $installed) {
+    Write-Host "        Locked install unavailable - resolving with uv ..."
+    & $uvExe pip install --python $venvPython --link-mode=copy -C editable_mode=compat -e "$destSrc[all,anthropic,telegram]"
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
+}
+if (-not $installed) {
     Write-Host "        uv install failed - falling back to pip ..."
     & $venvPython -m ensurepip --upgrade | Out-Null
-    & $venvPython -m pip install -e "$destSrc[all]" "anthropic>=0.39.0"
+    if (Test-Path $reqFile) {
+        & $venvPython -m pip install --no-deps -r $reqFile
+        if ($LASTEXITCODE -eq 0) { & $venvPython -m pip install --no-deps --config-settings editable_mode=compat -e $destSrc }
+    } else {
+        & $venvPython -m pip install --config-settings editable_mode=compat -e "$destSrc[all,anthropic,telegram]"
+    }
     if ($LASTEXITCODE -ne 0) { throw "Failed to install Hermes dependencies" }
+}
+& $venvPython -c "import hermes_cli.main"
+if ($LASTEXITCODE -ne 0) { throw "Hermes installed but 'import hermes_cli' fails in the venv" }
+# Install stamp (same as install-deps.sh): version display + marks the tarball
+# tree as externally updated, so `hermes update` does not treat it as git.
+$verLine = Select-String -Path $verFile -Pattern '^hermes_agent_version:\s*(\S+)' | Select-Object -First 1
+$comLine = Select-String -Path $verFile -Pattern '^hermes_agent_commit:\s*(\S+)' | Select-Object -First 1
+if ($verLine -and $comLine -and ($HermesRef -ne "main")) {
+    $hv = $verLine.Matches[0].Groups[1].Value
+    $hc = $comLine.Matches[0].Groups[1].Value
+    Push-Location $destSrc
+    & $venvPython scripts\write_install_stamp.py --output install-stamp.json --update-mechanism external --commit $hc --branch $HermesRef --base-version $hv --display-version $hv --distance 0 --source build 2>&1 | Out-Null
+    Pop-Location
 }
 Write-Done "Dependencies installed"
 
@@ -341,9 +404,9 @@ Write-Done "Dependencies installed"
 # so Telegram works out of the box.
 # ---------------------------------------------------------------------------
 Write-Step "Installing messaging dependencies (Telegram) ..."
-$tgResult = & $uvExe pip install --python $venvPython --link-mode=copy "python-telegram-bot[webhooks]==22.6" 2>&1
+$tgResult = & $uvExe pip install --python $venvPython --link-mode=copy "python-telegram-bot[webhooks]==22.8" 2>&1
 if ($LASTEXITCODE -ne 0) {
-    & $venvPython -m pip install "python-telegram-bot[webhooks]==22.6" 2>&1 | Out-Null
+    & $venvPython -m pip install "python-telegram-bot[webhooks]==22.8" 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Done "python-telegram-bot ready"
     } else {

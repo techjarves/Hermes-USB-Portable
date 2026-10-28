@@ -24,13 +24,25 @@
 
 ---
 
+## 🆕 What's New in portable-v1.9.0 (2026-10-28)
+
+*    **Hermes Agent v0.22.5**, pinned in `VERSION` (`hermes_agent_ref`) — every OS installs exactly that release; changing the pin updates a drive on its next start.
+*    **macOS works on the exFAT stick again** — four exFAT problems fixed (Unix control socket, WAL inode guard, AppleDouble `._*` files, a stale Linux `HERMES_HOME`), plus Python 3.14.9 and a locked install from upstream's `uv.lock`. Details in [CHANGELOG.md](CHANGELOG.md).
+*    **🔓 Uncensored models built in** — Explabs GLM-5.3 / DeepSeek V4.1 uncensored, LarpRouter DeepSeek abliterated and a private Ollama Qwen; see [Uncensored Model Integrations](#-uncensored-model-integrations).
+*    **Claude Pro/Max and SuperGrok subscription sign-in** — `[C]` and `[G]` in the model menu (the drive's own OAuth login, never a copied token).
+*    **`[P]` My saved models** — every model in your `data/config.yaml`, switchable in one keypress.
+*    **🐧 Boots Ubuntu from the same stick** (Ventoy) and runs Hermes in the live session — see [Boot Ubuntu from this stick](#-boot-ubuntu-from-this-stick-ventoy).
+*    **`Hermes-Mac.command`** Finder double-click launcher; dashboard on **127.0.0.1:9139** (never collides with a host Hermes on 9119).
+
+---
+
 ## ✨ Key Features
 
 *    **Zero Host Dependencies**: No pre-installed Python, Node.js, or package managers required on the computer. All runtimes are downloaded locally.
 *    **100% Portable**: Copy the entire directory to a USB flash drive or external SSD. Run it on any Windows, macOS, or Linux computer instantly.
 *    **Obsidian Brain**: A portable long-term memory vault (`Brain/`) that travels on the USB. Maintained by the agent, viewable in Obsidian on any machine.
 *    **Portable Chrome Launcher**: Carry your Chrome profile (logins, bookmarks, extensions) on the USB so you never re-login on a new PC.
-*    **Web Dashboard**: Built-in FastAPI + Vite React UI served at `http://127.0.0.1:9119` for config, API keys, sessions, and in-browser chat.
+*    **Web Dashboard**: Built-in FastAPI + Vite React UI served at `http://127.0.0.1:9139` for config, API keys, sessions, and in-browser chat.
 *    **Safe Eject**: One menu option saves sessions, organises/verifies the Brain, flushes sync, then ejects the drive cleanly.
 *    **Free Model Out of the Box**: Ships configured for NVIDIA's free **DeepSeek V4** NIM endpoint — add a free `nvapi-…` key and the agent works immediately, no paid API required.
 *    **Google Gemini via OAuth**: "Login with Google" model option — no API key or billing setup required.
@@ -38,6 +50,71 @@
 *    **Interactive Console Launcher**: Includes a beautiful terminal UI dashboard with state-tracking for setup status, LLM providers, and background gateways.
 *    **True Privacy & Isolation**: Your API keys (`data/.env`), conversations (`data/sessions/`), OAuth credentials (`data/auth/`), persistent memory, and custom skills are kept strictly within the portable folder.
 *    **Full Hermes Capabilities**: Retains all features of [Nous Research's Hermes Agent](https://github.com/NousResearch/hermes-agent), including memory storage and reusable skill generation.
+*    **Uncensored Models**: Explabs (GLM-5.3 uncensored, GLM-5.3 flash uncensored, DeepSeek V4.1 Flash uncensored) and LarpRouter (DeepSeek V4.1 Flash abliterated) as first-class providers — one key each in `data/.env`.
+*    **Subscription Sign-in**: Use your **Claude Pro/Max** or **SuperGrok** plan instead of an API key (`[C]` / `[G]` in the model menu).
+*    **Dual Boot**: The same stick boots a Ventoy Ubuntu live session and runs Hermes there with your data.
+
+---
+
+## 🔓 Uncensored Model Integrations
+
+The drive ships ready for uncensored and abliterated models through OpenAI-compatible providers. Add the key,
+pick the model with `[P]` (My saved models) or `/model` in chat, done. Keys live only in `data/.env`, which is
+gitignored and never leaves the stick.
+
+| Provider | Model id | Type | Context | Key in `data/.env` | Checked on the stick (2026-10-28) |
+|---|---|---|---|---|---|
+| Explabs (`api.experientiallabs.ai`) | `glm-5.3-flash-uncensored` | uncensored GLM-5.3 (fast) | 1M | `EXPLABS_API_KEY` | ✅ replied (20 s) |
+| Explabs | `deepseek-v4.1-flash-uncensored` | uncensored DeepSeek V4.1 Flash | 1M | `EXPLABS_API_KEY` | not yet run |
+| Explabs | `glm-5.3-uncensored:free` | uncensored GLM-5.3, free tier | 1M | `EXPLABS_API_KEY` | ⚠️ free tier not processing requests |
+| LarpRouter (`larprouter.com`) | `deepseek-v4.1-flash-1017-abliterated` | abliterated DeepSeek V4.1 Flash | 1M | `LARPROUTER_API_KEY` | ⚠️ needs account credit (HTTP 402) |
+| Your own Ollama box (e.g. over Tailscale) | `qwen3-vl-8b-agent:64k` | local vision Qwen3, no key | 64K | — | reachable only on your tailnet |
+
+`data/config.yaml` entries (copy, then add the keys to `data/.env`):
+
+```yaml
+providers:
+  explabs:
+    base_url: https://api.experientiallabs.ai/v1
+    key_env: EXPLABS_API_KEY
+    model: glm-5.3-flash-uncensored
+    context_length: 1048576
+    models: [glm-5.3-uncensored:free, glm-5.3-flash-uncensored, deepseek-v4.1-flash-uncensored]
+    discover_models: false
+  larprouter:
+    base_url: https://larprouter.com/v1
+    key_env: LARPROUTER_API_KEY
+    model: deepseek-v4.1-flash-1017-abliterated
+    context_length: 1000000
+    models: [deepseek-v4.1-flash-1017-abliterated]
+    discover_models: false
+  breakout-mini:                       # optional: your own Ollama server
+    base_url: http://<tailscale-host>:11434/v1
+    model: qwen3-vl-8b-agent:64k
+    context_length: 65536
+    discover_models: false
+```
+
+Pick them with `[P]` in the launcher, or straight from a terminal with the syntax verified on the stick:
+`hermes chat --provider custom:explabs -m glm-5.3-flash-uncensored`. The drive has **no
+automatic fallback**: it never silently swaps your chosen model for another one. These models answer without the
+usual refusals — you are responsible for how you use them and for each provider's terms.
+
+---
+
+## 🐧 Boot Ubuntu from this stick (Ventoy)
+
+The stick can also boot a full **Ubuntu 26.04 live session** (Ventoy + the Ubuntu ISO in the drive root; neither
+is in git — download the ISO yourself). In the live session:
+
+1. Open the stick in Files and run **`run-hermes.sh`** (or `bash setup-live-ubuntu.sh`). It adds a *Hermes Agent
+   Portable* desktop shortcut and a **`hermes-usb`** command (in `/usr/local/bin`, or `~/.local/bin` without sudo),
+   then starts Hermes.
+2. Next time just use the desktop shortcut or type **`hermes-usb`** (`README_HERMES.txt` on the stick has the short
+   version).
+
+Everything — sessions, memories, skills, keys and the Brain vault — is the same `data/` and `Brain/` you use on
+macOS and Windows. The exFAT fixes in v1.9.0 apply to Linux too (Linux reports the socket problem as `EPERM`).
 
 ---
 
@@ -58,9 +135,9 @@ chmod +x launch.sh
 ./launch.sh
 ```
 
-> 💡 **macOS Double-Click Shortcut:** If you want to double-click in Finder to launch, rename `launch.sh` to `launch.command`. macOS recognizes `.command` files and opens them in Terminal automatically.
+> 💡 **macOS double-click:** open the drive in Finder and double-click **`Hermes-Mac.command`**. It opens Terminal and starts `launch.sh` for you (no renaming needed).
 
-> 🐧 **Linux (Fedora, Ubuntu, RHEL, Arch) + exFAT drives:** Fully supported. Fedora Linux 44+ and all glibc Linux distributions run out-of-box. Setup auto-detects exFAT, stages the runtime on local disk, copies binaries back, and Playwright Chromium headless web-automation is verified and operational., which used to break first-run setup (`tar: Cannot create symlink … Operation not permitted`). Since **portable-v1.6.0** the setup detects this automatically: it unpacks the runtime on local disk and copies it back as plain files, and keeps the Python virtual-env on local disk (rebuilt on demand). No action needed — just run `./launch.sh`. (Browser/Playwright web-automation tools remain limited on exFAT-Linux; everything else works.)
+> 🐧 **Linux (Fedora, Ubuntu, RHEL, Arch) + exFAT drives:** Fully supported on glibc distributions. exFAT cannot hold symlinks, which used to break first-run setup (`tar: Cannot create symlink … Operation not permitted`); since **portable-v1.6.0** setup detects this, unpacks the runtimes on local disk, copies them back as plain files, and keeps the Python virtual-env on local disk (rebuilt on demand). Since **portable-v1.9.0** the launcher also moves Hermes' control socket off the drive and keeps the session store exFAT-safe. No action needed — just run `./launch.sh`.
 
 ---
 
@@ -149,7 +226,7 @@ graph TD
     I --> J[Prepend portable bin/ paths to Env PATH]
     J --> K[Launch Terminal Dashboard Menu]
     K --> L[Start Chat / Background Gateway]
-    L --> M[Dashboard binds on 127.0.0.1:9119]
+    L --> M[Dashboard binds on 127.0.0.1:9139]
     K --> N[Agent writes to Brain/ Obsidian vault]
     K --> O[Chrome Launcher loads chrome-profile/]
 ```
@@ -230,12 +307,19 @@ Alternatively, you can select option **`[2]` (Setup / Reconfigure)** in the Laun
 
 **No API key at all?** Use **`[5] Google Gemini — login with Google (OAuth, no API key)`**. A browser window opens for Google sign-in; credentials are stored in `data/auth/google_oauth.json` on the USB and travel with the drive. See [docs/GEMINI-LOGIN.md](docs/GEMINI-LOGIN.md) for models, troubleshooting, and the Google ToS note.
 
+**Claude or Grok on your subscription (no API key)?** Press **`[M]`**, then **`[C]`** to sign in with a Claude Pro/Max plan. A browser opens on claude.ai: approve it, copy the code it shows and paste it into the launcher. **`[G]`** does the same for a SuperGrok plan using a device code (open the link, confirm the code). Both logins are saved to `data/auth.json` on the drive. They are the drive's **own** logins, not copies of a Mac or PC token, so when one machine refreshes its token, the other installs stay signed in. The main menu shows whether the drive is signed in to Claude.
+
+**Your own providers:** anything listed under `providers:` in `data/config.yaml` (OpenAI-compatible endpoints with a `key_env`, a LAN/Tailscale Ollama box, …) and in `model_aliases:` appears in **`[M]` → `[P] My saved models`**. Each entry shows whether its key or login is present (key *names* only, never values), and picking a number switches to it.
+
 ### Model Switcher
 
 Press **`[M]`** at the main menu to switch between all available providers and models without editing any files:
 
 | # | Provider | Auth Method |
 |---|----------|-------------|
+| `[C]` | **Claude — Pro/Max plan** | **Subscription sign-in (OAuth)** — `hermes auth add anthropic --type oauth` |
+| `[G]` | **Grok — SuperGrok plan** | **Subscription sign-in (OAuth device code)** — `hermes auth add xai-oauth` |
+| `[P]` | **My saved models** | Every `providers:` / `model_aliases:` entry in `data/config.yaml`, with key/login status |
 | `[1]` | **NVIDIA — DeepSeek V4** | API key (**free** credits · NIM) |
 | `[2]` | Kimi for Coding | API key |
 | `[3]` | Ollama | Local server (URL) |
@@ -257,7 +341,7 @@ A browser-based UI for managing Hermes — model/provider config, API keys, sess
 - From the launcher, press **`[D] Open Dashboard`**
 - Or run `hermes dashboard --skip-build` from a terminal inside the vault
 
-The dashboard is served at **`http://127.0.0.1:9119`** (localhost only).
+The dashboard is served at **`http://127.0.0.1:9139`** (localhost only).
 
 **First-launch behaviour:** The server cold-starts in ~60-90 seconds (plugin discovery loads off the USB). The launcher **waits for the server to actually bind** before opening your browser, so you will never see a blank "connection refused" page. Subsequent launches are faster, and if the server is already running it re-opens the tab instantly.
 
@@ -353,16 +437,24 @@ Full reference: [docs/SAFE-EJECT.md](docs/SAFE-EJECT.md).
 
 ## 🔄 Updating Hermes Agent
 
-Keep your agent up-to-date with the latest improvements from Nous Research:
+The bundled Hermes Agent is **pinned to a release tag**: `hermes_agent_ref:` in `VERSION`
+(currently **`v0.22.5`**). Every setup script and launcher reads that one pin.
 
-*   **Via Chat Command**: Within an active Hermes conversation, type:
-    ```text
-    /hermes update
-    ```
-*   **Via Launcher**: Navigate to `[4] Advanced Options` -> `[5] Update Hermes` in the Launcher terminal dashboard.
-*   **Manual Rebuild**: Delete `.cache/runtimes/<your-platform>` and the `src/hermes-agent` directory, then re-run the launcher to fetch the latest code from scratch.
+*   **Via Launcher**: `[4] Advanced Options` → `[5] Update Hermes`. It runs `git pull` on the
+    portable repo to fetch the newest launcher and pin. If the pin changed, it restarts the launcher,
+    which downloads that release and rebuilds the venv.
+*   **Automatically**: on every launch, if `src/hermes-agent/.portable-ref` differs from the pin,
+    setup runs once and installs the pinned release. If the venv was built for an older source
+    (stamp `.portable-ref` inside the venv), only the Python packages are refreshed.
+*   **Manual Rebuild**: delete `.cache/runtimes/<your-platform>` and `src/hermes-agent`, then run the
+    launcher again.
 
-> ℹ️ The `VERSION` file pins the portable wrapper version to the exact upstream `hermes-agent` commit it was last verified against. See [docs/UPDATING.md](docs/UPDATING.md) for the full sync + bump + push workflow.
+> ⚠️ `hermes update` / `/update` inside a chat **cannot** update this install. The source is a
+> release tarball, not a git checkout, so use the launcher option above. Before v1.9.0 the setup took
+> upstream `main` once and reused the cached `source.tar.gz` forever, which is how drives got stuck
+> on an old build.
+
+> ℹ️ See [docs/UPDATING.md](docs/UPDATING.md) for the bump + verify + push workflow.
 
 ---
 
@@ -428,7 +520,7 @@ Tagged releases range from **`portable-v1.0.0`** through **`portable-v1.8.3`**. 
 <details>
 <summary><strong>Dashboard shows a blank page or "connection refused"</strong></summary>
 
-*   On first launch the server takes ~60-90 seconds to cold-start. The launcher now waits for the server to respond before opening the browser — if you opened it manually too early, wait for the "Dashboard ready at http://127.0.0.1:9119" message in the terminal, then refresh.
+*   On first launch the server takes ~60-90 seconds to cold-start. The launcher now waits for the server to respond before opening the browser — if you opened it manually too early, wait for the "Dashboard ready at http://127.0.0.1:9139" message in the terminal, then refresh.
 *   If the SPA assets are missing, rebuild with: `cd src/hermes-agent/web && npm install && npm run build`.
 *   If a stale server is holding the port: `hermes dashboard --stop`, then re-open the dashboard.
 *   See [docs/DASHBOARD.md](docs/DASHBOARD.md) for full troubleshooting.

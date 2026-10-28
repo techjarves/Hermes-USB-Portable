@@ -44,6 +44,22 @@ esac
 RUNTIME_DIR="$CACHE_DIR/runtimes/${PLATFORM}-${ARCH}"
 
 # ---------------------------------------------------------------------------
+# Pinned Hermes Agent release (VERSION -> hermes_agent_ref). When the source on
+# the drive is older than the pin (a `git pull` bumped VERSION, or the drive was
+# set up before v1.9.0), drop ready.flag so the setup below downloads the pinned
+# release and rebuilds the venv. One pin for every platform on the drive.
+# ---------------------------------------------------------------------------
+HERMES_AGENT_REF="$(awk '/^hermes_agent_ref:/{print $2; exit}' "$PORTABLE_ROOT/VERSION" 2>/dev/null || true)"
+HERMES_AGENT_REF="${HERMES_AGENT_REF:-main}"
+SRC_REF="$(cat "$SRC_DIR/hermes-agent/.portable-ref" 2>/dev/null || true)"
+if [ "$HERMES_AGENT_REF" != "main" ] && [ -f "$RUNTIME_DIR/ready.flag" ] && [ "$SRC_REF" != "$HERMES_AGENT_REF" ]; then
+    echo ""
+    echo "[UPDATE] Hermes Agent on this drive: ${SRC_REF:-pre-v1.9.0 build} -> pinned ${HERMES_AGENT_REF}."
+    echo "         Running setup once to install it (downloads the release, rebuilds the venv) ..."
+    rm -f "$RUNTIME_DIR/ready.flag"
+fi
+
+# ---------------------------------------------------------------------------
 # Friendly device + OS identity (used in the dashboard and device memory)
 # ---------------------------------------------------------------------------
 DEVICE_HOST="$(hostname 2>/dev/null | cut -d. -f1)"
@@ -95,6 +111,13 @@ else
     VIRTUAL_ENV="$RUNTIME_DIR/venv"
 fi
 
+# Install/refresh Hermes' Python packages into the venv at $1 via the shared
+# scripts/install-deps.sh (locked set from uv.lock, editable compat install,
+# Playwright, import check, venv stamp). Non-zero on failure.
+_install_hermes_deps() {
+    bash "$PORTABLE_ROOT/scripts/install-deps.sh" "$PORTABLE_ROOT" "$1"
+}
+
 # If the venv is missing (e.g. after a reboot purged $TMPDIR), rebuild it.
 if [ ! -x "$VIRTUAL_ENV/bin/python" ]; then
     echo ""
@@ -122,20 +145,48 @@ if [ ! -x "$VIRTUAL_ENV/bin/python" ]; then
     if ! "$UV_EXE" venv "$VIRTUAL_ENV" --python "$PYTHON_EXE" --seed 2>/dev/null; then
         "$UV_EXE" venv "$VIRTUAL_ENV" --python "$PYTHON_EXE"
     fi
-    if ! "$UV_EXE" pip install --python "$VIRTUAL_ENV/bin/python" --link-mode=copy \
-        -e "$SRC_DIR/hermes-agent[all]" \
-        "anthropic>=0.39.0" \
-        "python-telegram-bot[webhooks]==22.6" "playwright" 2>/dev/null; then
-        "$VIRTUAL_ENV/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
-        "$VIRTUAL_ENV/bin/python" -m pip install \
-            -e "$SRC_DIR/hermes-agent[all]" \
-            "anthropic>=0.39.0" \
-            "python-telegram-bot[webhooks]==22.6" 2>/dev/null || true
+    if _install_hermes_deps "$VIRTUAL_ENV"; then
+        echo "[OK]    Venv rebuilt."
+    else
+        echo "[WARN]  Venv rebuilt, but installing Hermes' Python packages failed (offline?)."
     fi
-    echo "[OK]    Venv rebuilt."
+fi
+
+# Venv built for an older source release (stamp mismatch): refresh deps once.
+SRC_REF="$(cat "$SRC_DIR/hermes-agent/.portable-ref" 2>/dev/null || true)"
+VENV_REF="$(cat "$VIRTUAL_ENV/.portable-ref" 2>/dev/null || true)"
+if [ -x "$VIRTUAL_ENV/bin/python" ] && [ -n "$SRC_REF" ] && [ "$VENV_REF" != "$SRC_REF" ]; then
+    echo ""
+    echo "[INFO]  Updating Python packages for Hermes Agent ${SRC_REF} (venv: ${VENV_REF:-older build}) ..."
+    if _install_hermes_deps "$VIRTUAL_ENV"; then
+        echo "[OK]    Packages up to date."
+    else
+        echo "[WARN]  Package refresh failed (offline?) — continuing with the existing venv."
+    fi
+fi
+
+# exFAT cannot hold Unix sockets, and Hermes >= 0.22 refuses to start a chat
+# without its control socket (it used to bind $HERMES_HOME/gateway.sock on the
+# drive). scripts/apply-patches.py moves the socket to the temp dir in that
+# case, using Hermes' own pointer-file fallback. Idempotent; costs ~50 ms.
+if [ -x "$VIRTUAL_ENV/bin/python" ] && [ -f "$PORTABLE_ROOT/scripts/apply-patches.py" ]; then
+    "$VIRTUAL_ENV/bin/python" "$PORTABLE_ROOT/scripts/apply-patches.py" --quiet "$SRC_DIR/hermes-agent" \
+        || echo "[WARN]  Portable compatibility patches incomplete — chats may fail on this exFAT drive."
 fi
 
 export HERMES_HOME="$HERMES_HOME"
+
+# data/.env must never pin HERMES_HOME (or the vault) to an absolute path: the
+# drive mounts somewhere else on every machine, and Hermes loads .env OVER the
+# environment. A Linux session once left HERMES_HOME=/run/media/... in it, and
+# every chat on macOS then died with "Read-only file system: '/run'" (v1.9.0 fix).
+_VAULT_LINE="OBSIDIAN_VAULT_PATH=$PORTABLE_ROOT/Brain"
+if [ -f "$HERMES_HOME/.env" ] && { grep -q '^HERMES_HOME=' "$HERMES_HOME/.env" \
+        || { grep -q '^OBSIDIAN_VAULT_PATH=' "$HERMES_HOME/.env" && ! grep -qxF "$_VAULT_LINE" "$HERMES_HOME/.env"; }; }; then
+    grep -v '^HERMES_HOME=' "$HERMES_HOME/.env" \
+        | sed -e "s|^OBSIDIAN_VAULT_PATH=.*|$_VAULT_LINE|" > "$HERMES_HOME/.env.tmp" \
+        && mv "$HERMES_HOME/.env.tmp" "$HERMES_HOME/.env"
+fi
 export VIRTUAL_ENV
 export PATH="$VIRTUAL_ENV/bin:$RUNTIME_DIR/python/bin:$RUNTIME_DIR/node/bin:$RUNTIME_DIR/uv:$RUNTIME_DIR/bin:$PATH"
 export PYTHONNOUSERSITE=1
@@ -150,6 +201,23 @@ export NPM_CONFIG_PREFIX="$RUNTIME_DIR/node"
 # Prevent Node/npm from writing to host home directory
 export HOME="$PORTABLE_ROOT/.cache/unix-home"
 mkdir -p "$HOME"
+
+# Session store journal mode: exFAT has no stable inode numbers, and Hermes'
+# WAL guard compares the inodes of state.db-wal/-shm ("FATAL: session storage
+# stopped writing because another Hermes process still holds a deleted
+# state.db-wal"). Hermes supports database.journal_mode=delete for exactly such
+# filesystems: set it once, and convert a store that is still WAL on disk
+# (SQLite header byte 18 = 2) offline - nothing else from this drive runs yet.
+if [ -f "$HERMES_HOME/config.yaml" ] \
+   && ! grep -qE '^[[:space:]]+journal_mode:[[:space:]]*"?delete"?' "$HERMES_HOME/config.yaml"; then
+    hermes config set database.journal_mode delete >/dev/null 2>&1 || true
+fi
+if [ -f "$HERMES_HOME/state.db" ] \
+   && [ "$(od -An -tu1 -j18 -N1 "$HERMES_HOME/state.db" 2>/dev/null | tr -d ' ')" = "2" ]; then
+    echo "[INFO]  Switching the session store to journal_mode=delete (exFAT-safe) ..."
+    hermes sessions set-journal-mode delete >/dev/null 2>&1 \
+        || echo "[WARN]  Could not convert state.db yet (another Hermes from this drive running?). Retrying next launch."
+fi
 
 # ---------------------------------------------------------------------------
 # Portable Brain (obsidian-wiki) wiring
@@ -283,6 +351,14 @@ detect_status() {
         SETUP_ICON="[OK]"
         SETUP_COLOR="$BRIGHT_GREEN"
     fi
+    # A subscription login (Claude / Grok / Gemini OAuth) counts as configured too.
+    if [ "$SETUP_STATUS" != "Configured" ] && [ -s "$HERMES_HOME/auth.json" ]; then
+        SETUP_STATUS="Configured"
+        SETUP_ICON="[OK]"
+        SETUP_COLOR="$BRIGHT_GREEN"
+    fi
+    CLAUDE_STATUS="not signed in"
+    if _has_oauth anthropic; then CLAUDE_STATUS="signed in"; fi
 
     if [ -f "$HERMES_HOME/config.yaml" ]; then
         PROVIDER_NAME=$(grep '^  provider:' "$HERMES_HOME/config.yaml" | head -n 1 | awk '{print $2}' || true)
@@ -312,7 +388,11 @@ detect_status() {
     fi
 
     HERMES_VERSION="unknown"
-    if [ -f "$SRC_DIR/hermes-agent/hermes_cli/__init__.py" ]; then
+    if [ -s "$SRC_DIR/hermes-agent/.portable-ref" ]; then
+        # Pinned release installed by setup (v0.22+ no longer keeps a plain
+        # __version__ string in hermes_cli/__init__.py).
+        HERMES_VERSION="$(sed 's/^v//' "$SRC_DIR/hermes-agent/.portable-ref" 2>/dev/null || echo unknown)"
+    elif [ -f "$SRC_DIR/hermes-agent/hermes_cli/__init__.py" ]; then
         HERMES_VERSION=$(grep '__version__' "$SRC_DIR/hermes-agent/hermes_cli/__init__.py" | head -n 1 | sed 's/.*"\(.*\)".*/\1/')
     fi
 
@@ -365,6 +445,11 @@ show_menu() {
     echo -e " ${DIM}Setup${RESET}    ${SETUP_COLOR}${SETUP_ICON}${RESET} ${WHITE}${SETUP_STATUS}${RESET}"
     if [ -n "$PROVIDER_NAME" ]; then echo -e " ${DIM}Provider${RESET} ${CYAN}${PROVIDER_NAME}${RESET}"; fi
     if [ -n "$MODEL_NAME" ]; then echo -e " ${DIM}Model${RESET}    ${WHITE}${MODEL_NAME}${RESET}"; fi
+    if [ "$CLAUDE_STATUS" = "signed in" ]; then
+        echo -e " ${DIM}Claude${RESET}   ${BRIGHT_GREEN}[OK]${RESET} ${WHITE}signed in${RESET} ${GRAY}(Pro/Max subscription)${RESET}"
+    else
+        echo -e " ${DIM}Claude${RESET}   ${GRAY}[ ] not signed in — press [M], then [C]${RESET}"
+    fi
     if [ "${BRAIN_PAGES:-0}" -gt 0 ] 2>/dev/null; then
         echo -e " ${DIM}Brain${RESET}    ${BRIGHT_GREEN}[OK]${RESET} ${WHITE}${BRAIN_PAGES} pages${RESET} ${GRAY}(Obsidian vault)${RESET}"
     else
@@ -415,8 +500,8 @@ menu_chat() {
         echo -e "${GRAY}Press [2] Setup or [M] Switch Model from the main menu to add an API key.${RESET}"
         echo ""
     fi
-    hermes "$@"
-    local rc=$?
+    local rc=0
+    hermes "$@" || rc=$?
     echo ""
     if [ $rc -ne 0 ]; then
         echo -e "${BRIGHT_RED}[!] Hermes exited with code $rc.${RESET}"
@@ -428,7 +513,7 @@ menu_chat() {
 
 menu_setup() {
     safe_clear
-    hermes setup
+    hermes setup || true
     echo ""
     read -r -p "Press Enter to return to main menu ..." choice 2>/dev/null || true
     detect_status
@@ -439,12 +524,91 @@ menu_setup() {
 # Fast model / provider switcher
 # ---------------------------------------------------------------------------
 _apply_model() {   # provider  model  base_url(""=none)  [ENVKEY=VALUE]
-    local p="$1" m="$2" b="$3" e="$4"
+    # Always returns 0: under `set -e` a failed write must not kill the launcher.
+    local p="$1" m="$2" b="$3" e="$4" rc=0
     if [ -n "$e" ]; then
-        python3 "$PORTABLE_ROOT/scripts/switch-model.py" --config "$HERMES_HOME/config.yaml" --env "$HERMES_HOME/.env" --provider "$p" --model "$m" --base-url "$b" --set-env "$e"
+        python3 "$PORTABLE_ROOT/scripts/switch-model.py" --config "$HERMES_HOME/config.yaml" --env "$HERMES_HOME/.env" --provider "$p" --model "$m" --base-url "$b" --set-env "$e" || rc=$?
     else
-        python3 "$PORTABLE_ROOT/scripts/switch-model.py" --config "$HERMES_HOME/config.yaml" --env "$HERMES_HOME/.env" --provider "$p" --model "$m" --base-url "$b"
+        python3 "$PORTABLE_ROOT/scripts/switch-model.py" --config "$HERMES_HOME/config.yaml" --env "$HERMES_HOME/.env" --provider "$p" --model "$m" --base-url "$b" || rc=$?
     fi
+    [ "$rc" -eq 0 ] || echo -e "${YELLOW}Could not update data/config.yaml (exit $rc).${RESET}"
+    return 0
+}
+
+# True when data/auth.json holds an OAuth (subscription) login for provider $1.
+_has_oauth() {
+    [ -s "$HERMES_HOME/auth.json" ] || return 1
+    python3 - "$HERMES_HOME/auth.json" "$1" <<'PY' 2>/dev/null
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+pool = (data.get("credential_pool") or {}).get(sys.argv[2]) or []
+sys.exit(0 if any(isinstance(e, dict) and e.get("auth_type") == "oauth" for e in pool) else 1)
+PY
+}
+
+# Claude via a Pro/Max SUBSCRIPTION (OAuth) — no API key. Hermes' native PKCE
+# login: a browser opens on claude.ai, you approve, then paste the code back
+# here. The login is written to data/auth.json, so it travels with the USB, and
+# it is the drive's OWN login (never a copy of a Mac/PC token): refreshing it
+# on one machine can never sign another Hermes install out.
+menu_model_claude_sub() {
+    echo ""
+    echo -e "${BRIGHT_YELLOW}Claude — sign in with your Pro/Max subscription (no API key)${RESET}"
+    if _has_oauth anthropic; then
+        echo -e "${BRIGHT_GREEN}This drive is already signed in to Claude.${RESET}"
+        local again=""
+        read -r -p "Sign in again (e.g. a different account)? [y/N]: " again || true
+        case "$again" in
+            y|Y|yes|YES) ;;
+            *) _pick_claude_model; return 0 ;;
+        esac
+    fi
+    echo -e "${GRAY}A browser opens on claude.ai. Approve, copy the code it shows, paste it below.${RESET}"
+    echo ""
+    local rc=0
+    hermes auth add anthropic --type oauth || rc=$?
+    if [ "$rc" -ne 0 ] || ! _has_oauth anthropic; then
+        echo ""
+        echo -e "${YELLOW}Claude sign-in did not complete (exit $rc) — model left unchanged.${RESET}"
+        return 0
+    fi
+    _pick_claude_model
+}
+
+_pick_claude_model() {
+    local m=""
+    read -r -p "Claude model [claude-opus-5-5]: " m || true
+    m=${m:-claude-opus-5-5}
+    _apply_model "anthropic" "$m" ""
+    echo -e "${BRIGHT_GREEN}Switched to Claude (subscription) — $m${RESET}"
+}
+
+# Grok via a SuperGrok subscription (OAuth device code) — no API key. Open the
+# link it prints, enter the code; the login is stored in data/auth.json.
+menu_model_grok_sub() {
+    echo ""
+    echo -e "${BRIGHT_YELLOW}Grok — sign in with your SuperGrok subscription (no API key)${RESET}"
+    if _has_oauth xai-oauth; then
+        echo -e "${BRIGHT_GREEN}This drive is already signed in to Grok.${RESET}"
+    else
+        echo -e "${GRAY}Open the link it prints and confirm the code shown (device sign-in).${RESET}"
+        echo ""
+        local rc=0
+        hermes auth add xai-oauth || rc=$?
+        if [ "$rc" -ne 0 ] || ! _has_oauth xai-oauth; then
+            echo ""
+            echo -e "${YELLOW}Grok sign-in did not complete (exit $rc) — model left unchanged.${RESET}"
+            return 0
+        fi
+    fi
+    local m=""
+    read -r -p "Grok model [grok-4.7]: " m || true
+    m=${m:-grok-4.7}
+    _apply_model "xai-oauth" "$m" ""
+    echo -e "${BRIGHT_GREEN}Switched to Grok (subscription) — $m${RESET}"
 }
 
 # Google Gemini via "Login with Google" (OAuth) — no API key.
@@ -461,12 +625,12 @@ menu_model_gemini_oauth() {
     echo -e "${GRAY}stored on this USB, so it works on any machine you plug into.${RESET}"
     echo ""
     # Native OAuth login. Creds -> $HERMES_HOME/auth/google_oauth.json.
-    hermes auth add google-gemini-cli
-    local rc=$?
+    local rc=0
+    hermes auth add google-gemini-cli || rc=$?
     if [ "$rc" -ne 0 ]; then
         echo ""
         echo -e "${YELLOW}Google sign-in did not complete (exit $rc) — model left unchanged.${RESET}"
-        return 1
+        return 0
     fi
     echo ""
     local m
@@ -482,6 +646,10 @@ menu_model() {
     echo -e "${BOLD}${BRIGHT_WHITE}                  Switch Model / Provider${RESET}"
     echo -e "${BRIGHT_CYAN}----------------------------------------------------------------${RESET}"
     echo ""
+    echo -e "  ${BRIGHT_YELLOW}[C]${RESET}  ${WHITE}Claude — Pro/Max plan${RESET}  ${BRIGHT_GREEN}sign in${RESET} ${GRAY}(subscription, no API key)${RESET}"
+    echo -e "  ${BRIGHT_YELLOW}[G]${RESET}  ${WHITE}Grok — SuperGrok plan${RESET}  ${BRIGHT_GREEN}sign in${RESET} ${GRAY}(subscription, no API key)${RESET}"
+    echo -e "  ${BRIGHT_YELLOW}[P]${RESET}  ${WHITE}My saved models${RESET}        ${GRAY}every provider in data/config.yaml${RESET}"
+    echo ""
     echo -e "  ${BRIGHT_YELLOW}[1]${RESET}  ${WHITE}NVIDIA — DeepSeek V4${RESET} ${BRIGHT_GREEN}free credits${RESET} ${GRAY}· cloud (NIM)${RESET}"
     echo -e "  ${BRIGHT_YELLOW}[2]${RESET}  ${WHITE}Kimi for Coding${RESET}      ${GRAY}cloud (API key)${RESET}"
     echo -e "  ${BRIGHT_YELLOW}[3]${RESET}  ${WHITE}Ollama${RESET}               ${GRAY}local LLM server${RESET}"
@@ -494,8 +662,12 @@ menu_model() {
     echo -e "  ${BRIGHT_YELLOW}[10]${RESET} ${WHITE}Full interactive picker${RESET}  ${GRAY}(hermes model)${RESET}"
     echo -e "  ${BRIGHT_YELLOW}[11]${RESET} ${GRAY}Back${RESET}"
     echo ""
-    read -p "$(echo -e "${BRIGHT_CYAN}Select model: ${RESET}")" mc
+    read -p "$(echo -e "${BRIGHT_CYAN}Select model: ${RESET}")" mc || mc=11
     case "$mc" in
+        c|C) menu_model_claude_sub ;;
+        g|G) menu_model_grok_sub ;;
+        p|P) python3 "$PORTABLE_ROOT/scripts/my-models.py" --home "$HERMES_HOME" \
+                 --switcher "$PORTABLE_ROOT/scripts/switch-model.py" || true ;;
         1) # NVIDIA NIM — free credits at build.nvidia.com. The native 'nvidia'
            #   provider reads NVIDIA_API_KEY and has the NIM base_url built in.
            #   DeepSeek V4: 'flash' is the verified default (fast first token).
@@ -530,7 +702,7 @@ menu_model() {
            read -p "Model name: " m
            read -p "API key (blank if none): " k
            if [ -n "$k" ]; then _apply_model "custom" "$m" "$u" "OPENAI_API_KEY=$k"; else _apply_model "custom" "$m" "$u"; fi ;;
-        10) hermes model ;;
+        10) hermes model || true ;;
         11) detect_status; show_menu; return ;;
         *) menu_model; return ;;
     esac
@@ -542,7 +714,7 @@ menu_model() {
 
 menu_gateway() {
     if [ "$GATEWAY_STATUS" = "Running (PID $GATEWAY_PID)" ]; then
-        hermes gateway stop
+        hermes gateway stop || true
         echo ""
         echo -e "${BRIGHT_GREEN}Gateway stopped.${RESET}"
     else
@@ -605,9 +777,13 @@ _open_url() {
 menu_dashboard() {
     safe_clear
     echo -e "${BRIGHT_YELLOW}Hermes Dashboard${RESET}  ${GRAY}(web UI — config, API keys, sessions, chat)${RESET}"
-    echo -e "${GRAY}Served on localhost only at ${WHITE}http://127.0.0.1:9119${RESET}${GRAY} (no keys exposed on the network).${RESET}"
+    # Port 9139, not Hermes' default 9119: a host that runs its own Hermes
+    # dashboard (e.g. the owner's Mac) already owns 9119, and the "already
+    # running?" probe below would then open the HOST's dashboard instead.
+    local port="${HERMES_PORTABLE_DASHBOARD_PORT:-9139}"
+    echo -e "${GRAY}Served on localhost only at ${WHITE}http://127.0.0.1:${port}${RESET}${GRAY} (no keys exposed on the network).${RESET}"
     echo ""
-    local url="http://127.0.0.1:9119"
+    local url="http://127.0.0.1:${port}"
     local dist="$SRC_DIR/hermes-agent/hermes_cli/web_dist/index.html"
 
     # Already running? Just (re)open the browser — don't spawn a second server.
@@ -624,11 +800,11 @@ menu_dashboard() {
     # ~60-90s, and opening the browser first lands on a connection-refused page.
     mkdir -p "$HERMES_HOME/logs"
     if [ -f "$dist" ]; then
-        nohup hermes dashboard --skip-build --no-open --port 9119 \
+        nohup hermes dashboard --skip-build --no-open --port "$port" \
             > "$HERMES_HOME/logs/dashboard.log" 2>&1 < /dev/null &
     else
         echo -e "${DIM}First run — building the dashboard UI once (bundled Node) ...${RESET}"
-        nohup hermes dashboard --no-open --port 9119 \
+        nohup hermes dashboard --no-open --port "$port" \
             > "$HERMES_HOME/logs/dashboard.log" 2>&1 < /dev/null &
     fi
     disown 2>/dev/null || true
@@ -716,8 +892,8 @@ show_advanced() {
 
 adv_doctor() {
     safe_clear
-    hermes doctor
-    read -p "Press Enter to continue ..."
+    hermes doctor || true
+    read -p "Press Enter to continue ..." || true
     show_advanced
 }
 
@@ -736,7 +912,7 @@ adv_logs() {
 
 adv_config() {
     safe_clear
-    hermes config edit
+    hermes config edit || true
     show_advanced
 }
 
@@ -760,10 +936,31 @@ adv_restart() {
     show_menu
 }
 
+# Portable update. `hermes update` cannot update this install (the source is a
+# release tarball, not a git checkout), so: pull the launcher + version pin from
+# GitHub, then let the pin check install the pinned Hermes Agent release.
 adv_update() {
     safe_clear
-    hermes update
-    read -p "Press Enter to continue ..."
+    echo -e "${BRIGHT_YELLOW}Update Hermes Portable${RESET}"
+    if command -v git >/dev/null 2>&1 && git -C "$PORTABLE_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo -e "${GRAY}Pulling the latest launcher + version pin from GitHub ...${RESET}"
+        git -C "$PORTABLE_ROOT" pull --ff-only || echo -e "${YELLOW}git pull failed — keeping the current pin.${RESET}"
+        # macOS writes AppleDouble ._* files into .git on exFAT; git then reads
+        # ._pack-*.idx as a corrupt pack. Merge + remove them right away.
+        if [ "$PLATFORM" = "macos" ]; then dot_clean -m "$PORTABLE_ROOT/.git" 2>/dev/null || true; fi
+    else
+        echo -e "${GRAY}Not a git checkout — using the pin already in VERSION.${RESET}"
+    fi
+    local pin cur
+    pin="$(awk '/^hermes_agent_ref:/{print $2; exit}' "$PORTABLE_ROOT/VERSION" 2>/dev/null || true)"
+    cur="$(cat "$SRC_DIR/hermes-agent/.portable-ref" 2>/dev/null || echo "unknown")"
+    if [ -n "$pin" ] && [ "$pin" != "$cur" ]; then
+        echo -e "${CYAN}Hermes Agent ${cur} -> ${pin}. Restarting the launcher to install it ...${RESET}"
+        rm -f "$RUNTIME_DIR/ready.flag"
+        exec bash "$PORTABLE_ROOT/launch.sh"
+    fi
+    echo -e "${BRIGHT_GREEN}Already on the pinned Hermes Agent ${cur}.${RESET}"
+    read -p "Press Enter to continue ..." || true
     show_advanced
 }
 

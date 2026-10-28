@@ -31,6 +31,21 @@ set "LAUNCH_LOG=%HERMES_HOME%\logs\launcher.log"
 call :ckpt "paths resolved (root=%PORTABLE_ROOT%)"
 
 REM ---------------------------------------------------------------------------
+REM Pinned Hermes Agent release (VERSION: hermes_agent_ref) - the same pin
+REM setup-unix.sh / launch.sh use. If the source on the drive is older than
+REM the pin, drop ready.flag so the setup below installs the pinned release.
+REM ---------------------------------------------------------------------------
+set "PIN_REF="
+for /f "tokens=2" %%r in ('findstr /B /C:"hermes_agent_ref:" "%PORTABLE_ROOT%\VERSION" 2^>nul') do set "PIN_REF=%%r"
+set "SRC_REF="
+if exist "%SRC_DIR%\hermes-agent\.portable-ref" set /p SRC_REF=<"%SRC_DIR%\hermes-agent\.portable-ref"
+if defined PIN_REF if not "!PIN_REF!"=="main" if not "!PIN_REF!"=="!SRC_REF!" if exist "%RUNTIME_DIR%\ready.flag" (
+    echo [UPDATE] Hermes Agent on this drive: "!SRC_REF!" -^> pinned !PIN_REF!. Re-running setup ...
+    call :ckpt "pin !PIN_REF! differs from source !SRC_REF! - forcing setup"
+    del "%RUNTIME_DIR%\ready.flag" 2>nul
+)
+
+REM ---------------------------------------------------------------------------
 REM First-run setup
 REM ---------------------------------------------------------------------------
 if not exist "%RUNTIME_DIR%\ready.flag" (
@@ -85,6 +100,13 @@ if not exist "%APPDATA%" mkdir "%APPDATA%" 2>nul
 if not exist "%LOCALAPPDATA%" mkdir "%LOCALAPPDATA%" 2>nul
 if not exist "%HOME%" mkdir "%HOME%" 2>nul
 call :ckpt "env isolation + portable dirs ready"
+
+REM data\.env must never pin HERMES_HOME to an absolute path: the drive letter
+REM or mount point differs on every machine and Hermes loads .env over the
+REM environment (a Linux /run/media path broke macOS in v1.8.x). Drop
+REM HERMES_HOME and point OBSIDIAN_VAULT_PATH at this drive's Brain folder.
+if exist "%HERMES_HOME%\.env" powershell -NoProfile -ExecutionPolicy Bypass -Command "$e='%HERMES_HOME%\.env'; $v='%PORTABLE_ROOT%\Brain'; $l=@(Get-Content $e); $n=@($l | Where-Object { $_ -notmatch '^HERMES_HOME=' } | ForEach-Object { if ($_ -match '^OBSIDIAN_VAULT_PATH=') { 'OBSIDIAN_VAULT_PATH=' + $v } else { $_ } }); if (($n -join [char]10) -ne ($l -join [char]10)) { Set-Content -Path $e -Value $n }" 2>nul
+call :ckpt "data\.env path guard done"
 
 if exist "%BRAIN_VAULT%" (
     set "OBSIDIAN_VAULT_PATH=%BRAIN_VAULT%"

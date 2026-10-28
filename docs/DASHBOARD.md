@@ -10,7 +10,7 @@ backend + a pre-built Vite/React single-page app).
 2. Press **`D`** → **Open Dashboard**.
 3. The launcher starts the server in the background and **waits until it's
    actually listening** before opening your browser at
-   **http://127.0.0.1:9119**. The **first launch can take ~60-90s** (plugin
+   **http://127.0.0.1:9139**. The **first launch can take ~60-90s** (plugin
    discovery loads off the USB); later launches are faster, and if it's already
    running the browser re-opens instantly.
 4. The server keeps running in the background. Stop it any time with
@@ -56,7 +56,7 @@ npm run build        # outputs to ../hermes_cli/web_dist
 
 ## Port
 
-Default **9119**. Override with `hermes dashboard --port <n>` (and update the
+Default **9139** on the drive (Hermes itself defaults to 9119; the portable stays off it so it never collides with a Hermes installed on the host). Set `HERMES_PORTABLE_DASHBOARD_PORT` to change it. Override with `hermes dashboard --port <n>` (and update the
 launcher call in `menu_dashboard()` in `launch.sh` if you want a different
 default).
 

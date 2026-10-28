@@ -2,6 +2,79 @@
 
 All notable changes to Hermes-USB-Portable. Versions follow the `portable-vMAJOR.MINOR.PATCH` pin in `VERSION`.
 
+## [portable-v1.9.0] — 2026-10-28
+
+### Hermes Agent v0.22.5 pinned, macOS fixed on the exFAT stick, Claude/Grok subscription sign-in, saved models
+
+**Why.** On macOS every chat on the stick died. Causes found, in the order they surfaced:
+1. `data/.env` carried `HERMES_HOME=/run/media/...` from a Linux session → `Read-only file system: '/run'`.
+   Both launchers now strip `HERMES_HOME=` from `data/.env` and re-point `OBSIDIAN_VAULT_PATH` at this drive.
+2. Setup always took upstream **main** once and reused `source.tar.gz` forever, so the drive sat on ~v0.21.0.
+   New single pin `hermes_agent_ref: v0.22.5` in `VERSION`, read by all four scripts; the archive name carries
+   the ref; `src/hermes-agent/.portable-ref` and a venv stamp trigger setup / a package refresh on mismatch.
+3. hermes-agent v0.22.x marks its core deps `python_version >= '3.14'` → on Python 3.13 a chat dies with
+   `No module named 'ruamel'`. Portable Python **3.13.14 → 3.14.9** (python-build-standalone 20261021, the build
+   the official installer ships); the Python archive name carries the version.
+4. A plain `pip install -e .[all]` cannot resolve v0.22.5 (`ResolutionImpossible`: browser-harness pins
+   pillow 12.3.0, upstream overrides it to 13.0.0 in `uv.lock`). New `scripts/install-deps.sh` (shared by setup
+   and the launcher) installs the **locked set exported from `uv.lock`**, then hermes-agent editable in
+   `editable_mode=compat` (v0.22 builds root modules in setup.py; the default finder maps no packages →
+   `No module named 'hermes_cli'`), then Playwright 1.64.1; it fails loudly unless `import hermes_cli.main` works,
+   and writes `install-stamp.json` so `hermes --version` shows `v0.22.5` instead of `unknown`.
+5. **exFAT cannot hold Unix sockets.** v0.22 made the gateway control socket mandatory ("gateway session bootstrap
+   control listener unavailable") and binds it at `data/gateway.sock` → `[Errno 45] Operation not supported`.
+   New `scripts/apply-patches.py` (idempotent, run by `launch.sh` on every start) applies three small patches:
+   `exfat-control-socket` (use Hermes' own temp-dir socket + `gateway.sock.path` pointer when the home cannot hold
+   a socket), `exfat-loop-tick` (liveness witness falls back to loopback TCP, as on Windows) and
+   `appledouble-tools` (tool discovery skips the binary `._*` twins macOS writes on exFAT — it crashed with
+   `UnicodeDecodeError` on `tools/._*.py`).
+6. **exFAT has no stable inode numbers**, which Hermes' WAL guard compares → "FATAL: session storage stopped
+   writing". The launcher sets `database.journal_mode: delete` (Hermes' documented mode for such filesystems) and
+   converts a store that is still WAL on disk with `hermes sessions set-journal-mode delete`.
+7. Extraction onto exFAT left ~23,500 AppleDouble `._*` files in the source tree; setup now runs `dot_clean -m`.
+
+**New.** Main menu shows the Claude login; model menu `[C]` Claude Pro/Max subscription
+(`hermes auth add anthropic --type oauth`), `[G]` SuperGrok (`hermes auth add xai-oauth`) and `[P]` "My saved
+models" (`scripts/my-models.py`: every provider/model in `data/config.yaml`, keys checked by name only).
+`Hermes-Mac.command` = Finder double-click launcher. Dashboard moved to **127.0.0.1:9139** (the host's own Hermes
+owns 9119). Subscription logins are the drive's **own** OAuth logins — never a copy of a host's token (a copied
+refresh token signs the other install out on refresh).
+
+### 🔓 Uncensored model integrations (highlight)
+First-class providers in the drive config, listed by `[P]` and documented in the README with a copy-paste
+`providers:` block (keys only ever in `data/.env`, which git ignores):
+- **Explabs** (`https://api.experientiallabs.ai/v1`, `EXPLABS_API_KEY`, 1M context): `glm-5.3-flash-uncensored`,
+  `deepseek-v4.1-flash-uncensored`, `glm-5.3-uncensored:free`.
+- **LarpRouter** (`https://larprouter.com/v1`, `LARPROUTER_API_KEY`, 1M context): `deepseek-v4.1-flash-1017-abliterated`.
+- **breakout-mini**: your own Ollama `qwen3-vl-8b-agent:64k` (64K) over Tailscale, no key.
+- Default model stays **Claude Opus 5.5**; Grok 4.7 via SuperGrok. **No automatic fallback** — the drive never
+  swaps the chosen model silently.
+
+### 🐧 Ubuntu dual boot from the same stick (Ventoy)
+`setup-live-ubuntu.sh`, `run-hermes.sh` and `README_HERMES.txt` are now tracked (they were gitignored): in an
+Ubuntu 26.04 live session booted from the stick they add a desktop shortcut and a `hermes-usb` command and start
+Hermes on the same `data/` and `Brain/`. The ISO and `ventoy/` stay out of git, and so does `Hermes-Restore/`
+(the private restore-kit images on the same stick). The exFAT fixes above cover Linux as well (`EPERM` instead of
+`EOPNOTSUPP`).
+
+### Verification (macOS 26, Apple Silicon, on the exFAT stick)
+- `scripts/setup-unix.sh` end to end: Python 3.13.14 → 3.14.9 replaced in place, v0.22.5 source kept (no 1.4 GB
+  re-extract), locked package set installed, `import hermes_cli.main` OK → `Setup Complete`. `install-deps.sh` alone
+  re-runs in ~6 s.
+- `hermes --version` → `Hermes Agent v0.22.5 (2026.9.24) · upstream bf0203a7`.
+- `apply-patches.py`: `--check` lists 3 missing → apply → re-run is a no-op (idempotent); patched modules compile.
+- `hermes sessions set-journal-mode delete` on the drive's `state.db`: header byte 18 `2` (WAL) → `1`; the existing
+  chat history is intact.
+- 12/12 extracted-launcher checks pass (`.env` path scrub, pin check, subscription-login detection);
+  `my-models.py --list/--select` works on a copy of the real config.
+- One-shot chats from a clean environment through the drive's own gateway (socket in `$TMPDIR` + pointer on the
+  drive): **Explabs `glm-5.3-flash-uncensored` replied `PORTABLE OK`** (20 s model time). LarpRouter → HTTP 402
+  `insufficient_credit` (account needs credit); `glm-5.3-uncensored:free` → not processed (free tier);
+  `deepseek-v4.1-flash-uncensored` not yet run.
+- Not verified here: Windows (no Windows machine — `launch.bat` / `setup-windows.ps1` carry the same pin, Python
+  3.14.9 and locked install, untested), the Ubuntu live session, and the Claude/Grok OAuth sign-in (needs the owner
+  in Terminal). First chat after plug-in takes a few minutes on a USB 3 stick (imports from the drive).
+
 ## [portable-v1.8.4] — 2026-06-16
 
 ### macOS (Apple Silicon) verification of the v1.8.x stack + hermes-agent re-sync to current main HEAD

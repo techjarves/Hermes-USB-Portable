@@ -66,9 +66,11 @@ case "$ARCH_RAW" in
     *)     PYTHON_ARCH="$ARCH_RAW" ;;
 esac
 
-# Pinned runtime versions (portable-v1.8.0, 2026-06-13). Python kept within
-# hermes-agent's `requires-python = ">=3.11,<3.14"`.
-PY_TAG="20260610"; PY_VER="3.13.14"
+# Pinned runtime versions. Python 3.14 since portable-v1.9.0: hermes-agent v0.22.x
+# marks its core deps (openai, ruamel, certifi, truststore ...) python_version >= '3.14',
+# so on 3.13 a chat dies with "No module named 'ruamel'". Same build the official
+# installer ships (python-build-standalone 20261021).
+PY_TAG="20261021"; PY_VER="3.14.9"
 NODE_VER="24.16.0"; UV_VER="0.11.21"; RG_VER="15.1.0"
 if [ "$PLATFORM" = "macos" ]; then
     PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PY_TAG}/cpython-${PY_VER}+${PY_TAG}-${PYTHON_ARCH}-apple-darwin-install_only.tar.gz"
@@ -82,7 +84,19 @@ else
     RG_URL="https://github.com/BurntSushi/ripgrep/releases/download/${RG_VER}/ripgrep-${RG_VER}-${ARCH_RAW}-unknown-linux-musl.tar.gz"
 fi
 
-SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/heads/main.tar.gz"
+# Hermes Agent source is PINNED to the release recorded in VERSION
+# (`hermes_agent_ref:`). The cached archive name carries the ref, so bumping the
+# pin downloads fresh source instead of silently reusing an old tarball (before
+# v1.9.0 setup took main HEAD once and then reused source.tar.gz forever).
+HERMES_AGENT_REF="$(awk '/^hermes_agent_ref:/{print $2; exit}' "$PORTABLE_ROOT/VERSION" 2>/dev/null || true)"
+HERMES_AGENT_REF="${HERMES_AGENT_REF:-main}"
+if [ "$HERMES_AGENT_REF" = "main" ]; then
+    SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/heads/main.tar.gz"
+else
+    SOURCE_URL="https://github.com/NousResearch/hermes-agent/archive/refs/tags/${HERMES_AGENT_REF}.tar.gz"
+fi
+# Which Python packages get installed (locked set, extras, Playwright pin) is
+# decided in scripts/install-deps.sh, shared with launch.sh.
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -230,16 +244,23 @@ extract_txz() { _extract_archive "$1" "$2" ""; }
 # 1. Portable Python
 # ---------------------------------------------------------------------------
 step "Installing portable Python ${PY_VER} ..."
-PY_ARCHIVE="$RUNTIME_DIR/python.tar.gz"
+# The archive name carries the version, so a version bump never reuses an old
+# cached python.tar.gz (the same trap the hermes-agent source fell into).
+PY_ARCHIVE="$RUNTIME_DIR/python-${PY_VER}.tar.gz"
 if ! download "$PYTHON_URL" "$PY_ARCHIVE"; then
     echo "[ERROR] Failed to download Python. Check your internet connection."
     exit 1
 fi
-# Bug fix: skip re-extraction if already unpacked (saves ~30s on repeat runs)
-if [ ! -d "$RUNTIME_DIR/python/bin" ]; then
+for _old in "$RUNTIME_DIR"/python.tar.gz "$RUNTIME_DIR"/python-*.tar.gz; do
+    { [ -f "$_old" ] && [ "$_old" != "$PY_ARCHIVE" ] && rm -f "$_old"; } || true
+done
+# Skip re-extraction only when the unpacked interpreter is the pinned version.
+_PY_HAVE="$("$RUNTIME_DIR/python/bin/python3" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || true)"
+if [ "$_PY_HAVE" != "$PY_VER" ]; then
+    [ -n "$_PY_HAVE" ] && echo "        Replacing Python $_PY_HAVE with $PY_VER ..."
     extract_tgz "$PY_ARCHIVE" "$RUNTIME_DIR/python"
 else
-    echo "        Already extracted — skipping."
+    echo "        Python $PY_VER already extracted — skipping."
 fi
 done_msg "Python ready"
 
@@ -322,19 +343,31 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Hermes source code
 # ---------------------------------------------------------------------------
-step "Downloading Hermes Agent source code ..."
-SRC_ARCHIVE="$RUNTIME_DIR/source.tar.gz"
+step "Downloading Hermes Agent source code (${HERMES_AGENT_REF}) ..."
+SRC_ARCHIVE="$RUNTIME_DIR/source-${HERMES_AGENT_REF}.tar.gz"
 if ! download "$SOURCE_URL" "$SRC_ARCHIVE"; then
     echo "[ERROR] Failed to download Hermes source. Aborting."
     exit 1
 fi
 # extract_tgz handles the exFAT no-symlink case (stage locally, deref-copy);
-# on native filesystems it extracts straight to the destination.
-if ! extract_tgz "$SRC_ARCHIVE" "$SRC_DIR/hermes-agent"; then
+# on native filesystems it extracts straight to the destination. Skip it when
+# the drive already holds this release: re-running setup (venv repair, Python
+# bump) must not rewrite ~1.4 GB of source onto a slow stick.
+if [ "$(cat "$SRC_DIR/hermes-agent/.portable-ref" 2>/dev/null || true)" = "$HERMES_AGENT_REF" ] \
+   && [ "$HERMES_AGENT_REF" != "main" ] && [ -f "$SRC_DIR/hermes-agent/pyproject.toml" ]; then
+    echo "        Hermes Agent $HERMES_AGENT_REF already extracted — skipping."
+elif ! extract_tgz "$SRC_ARCHIVE" "$SRC_DIR/hermes-agent"; then
     echo "[ERROR] Failed to extract Hermes source. Aborting."
     exit 1
 fi
-done_msg "Source code ready"
+# Record which release is on the drive (read by launch.sh / launch.bat). No
+# trailing newline, so every platform compares the same bytes.
+printf '%s' "$HERMES_AGENT_REF" > "$SRC_DIR/hermes-agent/.portable-ref"
+# Drop source archives of older pins (they are 50-70 MB each on the stick).
+for _old in "$RUNTIME_DIR"/source.tar.gz "$RUNTIME_DIR"/source-*.tar.gz; do
+    { [ -f "$_old" ] && [ "$_old" != "$SRC_ARCHIVE" ] && rm -f "$_old"; } || true
+done
+done_msg "Source code ready (${HERMES_AGENT_REF})"
 
 # ---------------------------------------------------------------------------
 # 6. macOS gatekeeper / permissions cleanup
@@ -345,6 +378,11 @@ if [ "$PLATFORM" = "macos" ]; then
     xattr -dr com.apple.quarantine "$RUNTIME_DIR/node" 2>/dev/null || true
     xattr -dr com.apple.quarantine "$RUNTIME_DIR/uv" 2>/dev/null || true
     xattr -dr com.apple.quarantine "$BIN_DIR" 2>/dev/null || true
+    # exFAT keeps extended attributes in binary AppleDouble "._<name>" twins -
+    # extraction leaves ~23,000 of them in the source tree, and loaders that
+    # glob *.py read them as source (v0.22.5 tool discovery crashed on
+    # tools/._*.py). dot_clean -m deletes them.
+    dot_clean -m "$SRC_DIR/hermes-agent" 2>/dev/null || true
     done_msg "Gatekeeper attributes cleared"
 fi
 
@@ -399,18 +437,14 @@ step "Installing Hermes Python dependencies ..."
 echo "        This may take 3-10 minutes depending on your connection."
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-# Try uv first (faster), fall back to pip on unsupported filesystem (e.g. ExFAT)
-# NOTE: "anthropic" is added explicitly — the kimi-coding / Anthropic providers
-# need the anthropic SDK, which hermes-agent[all] does NOT pull in.
-if ! "$UV_EXE" pip install --python "$VENV_PYTHON" --link-mode=copy -e "$SRC_DIR/hermes-agent[all]" "anthropic>=0.39.0" "playwright" 2>/dev/null; then
-    echo "        uv install failed — falling back to pip ..."
-    if ! "$VENV_PYTHON" -m ensurepip --upgrade >/dev/null 2>&1; then
-        echo "[WARN] Could not install pip in virtual environment"
-    fi
-    if ! "$VENV_PYTHON" -m pip install -e "$SRC_DIR/hermes-agent[all]" "anthropic>=0.39.0"; then
-        echo "[ERROR] Failed to install Hermes dependencies"
-        exit 1
-    fi
+# scripts/install-deps.sh is shared with launch.sh (venv rebuilds): it installs
+# the exact package set upstream locks in uv.lock (a fresh resolve hits
+# upstream's Pillow override and fails), then hermes-agent itself (editable,
+# compat mode), then Playwright, verifies `import hermes_cli.main`, and stamps
+# the venv with src/hermes-agent/.portable-ref. UV_CACHE_DIR set above is kept.
+if ! bash "$PORTABLE_ROOT/scripts/install-deps.sh" "$PORTABLE_ROOT" "$VENV_DIR"; then
+    echo "[ERROR] Failed to install Hermes dependencies"
+    exit 1
 fi
 done_msg "Dependencies installed"
 
@@ -423,8 +457,8 @@ done_msg "Dependencies installed"
 # so Telegram works out of the box.
 # ---------------------------------------------------------------------------
 step "Installing messaging dependencies (Telegram) ..."
-if ! "$UV_EXE" pip install --python "$VENV_PYTHON" --link-mode=copy "python-telegram-bot[webhooks]==22.6" 2>/dev/null; then
-    if ! "$VENV_PYTHON" -m pip install "python-telegram-bot[webhooks]==22.6" 2>/dev/null; then
+if ! "$UV_EXE" pip install --python "$VENV_PYTHON" --link-mode=copy "python-telegram-bot[webhooks]==22.8" 2>/dev/null; then
+    if ! "$VENV_PYTHON" -m pip install "python-telegram-bot[webhooks]==22.8" 2>/dev/null; then
         warn "python-telegram-bot install failed - will retry on first use"
     else
         done_msg "python-telegram-bot ready"
