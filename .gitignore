@@ -36,3 +36,7 @@ ventoy/
 
 # Restore kit images/backups that live on the same stick (multi-GB, private)
 Hermes-Restore/
+
+# drive-only additions (2026-11-20)
+OpenViking/
+USB-README-2026-11-20.md
