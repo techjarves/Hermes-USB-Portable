@@ -1,5 +1,11 @@
 # Changelog
 
+## portable-v1.9.1 - 2026-11-20
+- Pin: hermes-agent **v0.23.2** (commit ae2a81c - Mac parity, 2026-11-20). Python build, extras and
+  playwright pins unchanged from v1.9.0.
+- Drive refreshed: skills/memories/SOUL + provider config synced from the live Mac pair; Hermes kit v2
+  and the refreshed Brain vault on the drive.
+
 All notable changes to Hermes-USB-Portable. Versions follow the `portable-vMAJOR.MINOR.PATCH` pin in `VERSION`.
 
 ## [portable-v1.9.0] — 2026-10-28

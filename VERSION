@@ -1,12 +1,12 @@
 # Hermes-USB-Portable — version pin
 # Pairs the portable wrapper version with the exact bundled hermes-agent it ships.
 
-portable_version:        portable-v1.9.0
-hermes_agent_version:    0.22.5
-hermes_agent_ref:        v0.22.5
+portable_version:        portable-v1.9.1
+hermes_agent_version:    0.23.2
+hermes_agent_ref:        v0.23.2
 hermes_agent_upstream:   NousResearch/hermes-agent
-hermes_agent_commit:     bf0203a794a07aac3ff764972ab9087baa4e4f4e
-synced_on:               2026-10-28
+hermes_agent_commit:     ae2a81ccc00e9b7c06301523e5bb09608397149c
+synced_on:               2026-11-20
 
 # `hermes_agent_ref` is the ONE pin every setup script and launcher reads
 # (setup-unix.sh, setup-windows.ps1, launch.sh, launch.bat). Bump it here and
